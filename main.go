@@ -1,16 +1,54 @@
 package main
 
 import (
+	"debug/elf"
 	"fmt"
-	"io/ioutil"
+)
+
+const (
+	MVENDORID  = 0xF11
+	MARCHID    = 0xF12
+	MIMPID     = 0xF13
+	MHARTID    = 0xF14
+	MSTATUS    = 0x300
+	MISA       = 0x301
+	MEDELEG    = 0x302
+	MIDELEG    = 0x303
+	MIE        = 0x304
+	MTVEC      = 0x305
+	MCOUNTEREN = 0x306
+	MSCRATCH   = 0x340
+	MEPC       = 0x341
+	MCAUSE     = 0x342
+	MTVAL      = 0x343
+	MIP        = 0x344
+)
+
+type Privilege uint8
+
+const (
+	User       Privilege = 0
+	Supervisor Privilege = 1
+	Hypervisor Privilege = 2
+	Machine    Privilege = 3
 )
 
 type CPU struct {
-	pc  uint64
-	mem []byte
-	x   [32]int64
+	pc   uint64
+	mem  []byte
+	x    [32]int64
+	csr  [4096]uint64
+	priv Privilege
 
 	count uint64
+}
+
+func NewCPU(mem []byte, pc uint64) CPU {
+	return CPU{
+		pc:   pc,
+		mem:  mem,
+		priv: Machine,
+	}
 }
 
 func (cpu *CPU) run() error {
@@ -42,7 +80,13 @@ func (cpu *CPU) step() error {
 		return err
 	}
 
+	cpu.x[0] = 0
+
 	return nil
+}
+
+func (cpu *CPU) fetch() (uint32, error) {
+	return cpu.readuint32(cpu.pc)
 }
 
 type I struct {
@@ -134,6 +178,22 @@ func parseJ(instr uint32) J {
 	return J{
 		imm: int32(imm | (instr & 0x000ff000) | (instr&0x00100000)>>9 | (instr&0x7fe00000)>>20),
 		rd:  (instr >> 7) & 0b11111,
+	}
+}
+
+type CSR struct {
+	csr    uint32
+	rs     uint32
+	funct3 uint32
+	rd     uint32
+}
+
+func parseCSR(instr uint32) CSR {
+	return CSR{
+		csr:    (instr >> 20) & 0x00000fff,
+		rs:     (instr >> 15) & 0b11111,
+		funct3: (instr >> 12) & 0b111,
+		rd:     (instr >> 7) & 0b11111,
 	}
 }
 
@@ -259,6 +319,15 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 		case 0b111: // ANDI
 			fmt.Printf("ANDI %x\n", op)
 			cpu.x[op.rd] = cpu.x[op.rs1] & int64(op.imm)
+		case 0b001: // SLLI
+			fmt.Printf("SLLI %x\n", op)
+			if op.imm>>6 != 0 {
+				return fmt.Errorf("invalid shamt %x", op.funct3)
+			}
+			cpu.x[op.rd] = cpu.x[op.rs1] << op.imm
+		case 0b101: // SR_I
+			fmt.Printf("SR_I %x\n", op)
+			panic("nyi - SR_I")
 		default:
 			return fmt.Errorf("invalid arith op funct3: %x", op.funct3)
 		}
@@ -267,7 +336,51 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 	case 0b0001111:
 		panic("nyi - fence")
 	case 0b1110011:
-		panic("nyi - csr, ecall, ebreak")
+		op := parseCSR(instr)
+		switch op.funct3 {
+		case 0b000:
+			if op.funct3 != 0 || op.rd != 0 || op.rs != 0 {
+				return fmt.Errorf("invalid op ECALL/EBREAK: %x", op)
+			}
+			switch op.csr {
+			case 0:
+				panic("nyi - ECALL")
+			case 1:
+				panic("nyi - EBREAK")
+			case 0b001100000010:
+				cpu.pc = cpu.csr[MEPC]
+				cpu.priv = cpu.getMPP()
+				cpu.setMIE(cpu.getMPIE())
+				cpu.setMPIE(1)
+				// TODO: When we support user mode, go back to user mode on MRET?
+				//cpu.setMPP(0)
+			default:
+				return fmt.Errorf("invalid op ECALL/EBREAK: %x", op)
+			}
+		case 0b001:
+			fmt.Printf("CSRRW %v\n", op)
+			t := cpu.csr[op.csr]
+			cpu.csr[op.csr] = uint64(cpu.x[op.rs])
+			cpu.x[op.rd] = int64(t)
+		case 0b010:
+			fmt.Printf("CSRRS %v\n", op)
+			t := cpu.csr[op.csr]
+			cpu.csr[op.csr] |= uint64(cpu.x[op.rs])
+			cpu.x[op.rd] = int64(t)
+		case 0b011:
+			panic("nyi - CSRRC")
+		case 0b101:
+			fmt.Printf("CSRRWI %v\n", op)
+			t := cpu.csr[op.csr]
+			cpu.csr[op.csr] = uint64(op.rs)
+			cpu.x[op.rd] = int64(t)
+		case 0b110:
+			panic("nyi - CSRRSI")
+		case 0b111:
+			panic("nyi - CSRRCI")
+		default:
+			return fmt.Errorf("invalid csr op funct3: %x", op.funct3)
+		}
 	case 0b0111011:
 		panic("nyi - M extensions")
 	case 0b0101111:
@@ -286,14 +399,47 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 		panic("nyi - FNMADD.S")
 	case 0b1010011:
 		panic("nyi - F extension")
+	case 0b0011011:
+		op := parseI(instr)
+
+		switch op.funct3 {
+		case 0b000:
+			fmt.Printf("ADDIW %v\n", op)
+			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] + int64(op.imm)))
+		case 0b001:
+			fmt.Printf("SLLIW %v\n", op)
+			panic("nyi - SLLIW")
+		case 0b101:
+			if (op.imm>>11)&0b1 == 0b1 {
+				fmt.Printf("SRAIW %v\n", op)
+				panic("nyi - SRAIW")
+			} else {
+				fmt.Printf("SRLIW %v\n", op)
+				panic("nyi - SRLIW")
+			}
+		default:
+			return fmt.Errorf("invalid op %x funct3: %x", instr&0x7f, op.funct3)
+		}
 	default:
-		panic("nyi")
+		panic(fmt.Sprintf("nyi - opcode %x", instr&0x7f))
 	}
 	return nil
 }
 
-func (cpu *CPU) fetch() (uint32, error) {
-	return cpu.readuint32(cpu.pc)
+func (cpu *CPU) getMPP() Privilege {
+	return Privilege((cpu.csr[MSTATUS] >> 11) & 0b11)
+}
+
+func (cpu *CPU) setMIE(v uint64) {
+	cpu.csr[MSTATUS] |= (v & 0b1) << 3
+}
+
+func (cpu *CPU) getMPIE() uint64 {
+	return (cpu.csr[MSTATUS] >> 7) & 0b1
+}
+
+func (cpu *CPU) setMPIE(v uint64) {
+	cpu.csr[MSTATUS] |= (v & 0b1) << 7
 }
 
 func (cpu *CPU) readuint32(addr uint64) (uint32, error) {
@@ -333,15 +479,28 @@ func (cpu *CPU) writeuint8(addr uint64, val uint8) {
 }
 
 func do() error {
-	byts, err := ioutil.ReadFile("hello_world_fw.bin")
+	mem := make([]byte, 0x100000000)
+
+	f, err := elf.Open("rv64ui-p-add")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%v\n", f.FileHeader)
+	for _, prog := range f.Progs {
+		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Memsz], 0)
+		if err != nil {
+			return err
+		}
+		if n != int(prog.Memsz) {
+			return fmt.Errorf("didn't read full section")
+		}
+	}
+	err = f.Close()
 	if err != nil {
 		return err
 	}
 
-	mem := make([]byte, 0x10000000)
-	copy(mem[0x00100000:], byts)
-	cpu := CPU{mem: mem}
-	cpu.pc = 0x00100000
+	cpu := NewCPU(mem, f.Entry)
 	err = cpu.run()
 	if err != nil {
 		return err

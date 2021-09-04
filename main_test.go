@@ -15,3 +15,10 @@ func TestFoo(t *testing.T) {
 
 	fmt.Printf("%d, %d, %d, b=%d, c=%d, %d\n", x, y, a, b, c, d)
 }
+
+func TestMain(t *testing.T) {
+	err := do()
+	if err != nil {
+		t.Fail()
+	}
+}
