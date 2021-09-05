@@ -1,3 +1,4 @@
 out*.txt
 trace*.txt
 linux/fw_payload.dump
+coverage.*
