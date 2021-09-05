@@ -428,6 +428,18 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				return false, reason, addr
 			}
 			cpu.x[op.rd] = int64(data)
+		case 0b011: // LD
+			data, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.x[op.rd] = int64(data)
+		case 0b110: // LWU
+			data, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.x[op.rd] = int64(uint64(data))
 		default:
 			return false, IllegalInstruction, addr
 		}
@@ -440,6 +452,8 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.writeuint16(uint64(cpu.x[op.rs1]+int64(op.imm)), uint16(cpu.x[op.rs2]))
 		case 0b010: // SW
 			cpu.writeuint32(uint64(cpu.x[op.rs1]+int64(op.imm)), uint32(cpu.x[op.rs2]))
+		case 0b011: // SD
+			cpu.writeuint64(uint64(cpu.x[op.rs1]+int64(op.imm)), uint64(cpu.x[op.rs2]))
 		default:
 			return false, IllegalInstruction, addr
 		}
@@ -653,6 +667,14 @@ func (cpu *CPU) setMPIE(v uint64) {
 	cpu.csr[MSTATUS] |= (v & 0b1) << 7
 }
 
+func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
+	val := uint64(0)
+	for i := uint64(0); i < 8; i++ {
+		val |= (uint64(cpu.mem[addr+i]) << (i * 8))
+	}
+	return val, true, 0
+}
+
 func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
 	val := uint32(0)
 	for i := uint64(0); i < 4; i++ {
@@ -671,6 +693,13 @@ func (cpu *CPU) readuint16(addr uint64) (uint16, bool, TrapReason) {
 
 func (cpu *CPU) readuint8(addr uint64) (uint8, bool, TrapReason) {
 	return uint8(cpu.mem[addr]), true, 0
+}
+
+func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, TrapReason) {
+	for i := uint64(0); i < 8; i++ {
+		cpu.mem[addr+i] = byte(val >> (i * 8))
+	}
+	return true, 0
 }
 
 func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, TrapReason) {
