@@ -100,7 +100,7 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	}
 
 	addr := cpu.pc
-	fmt.Printf("%08d -- [%08x]: %08x %x\n", cpu.count, cpu.pc, instr, cpu.x)
+	// fmt.Printf("%08d -- [%08x]: %08x %x\n", cpu.count, cpu.pc, instr, cpu.x)
 	if instr&0b11 == 0b11 {
 		cpu.pc += 4
 	} else {
@@ -162,8 +162,6 @@ func (cpu *CPU) interrupt(pc uint64) {
 }
 
 func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool) bool {
-	fmt.Printf("trap: %v %v %v %v\n", reason, trapaddr, addr, isInterrupt)
-
 	var mdeleg, sdeleg uint64
 	if isInterrupt {
 		mdeleg, sdeleg = cpu.csr[MIDELEG], cpu.csr[SIDELEG]
@@ -350,49 +348,47 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	switch instr & 0x7f {
 	case 0b0110111: // LUI
 		op := parseU(instr)
-		fmt.Printf("LUI %v\n", op)
 		cpu.x[op.rd] = int64(op.imm)
 	case 0b0010111: // AUIPC
 		op := parseU(instr)
-		fmt.Printf("AIUPC %x\n", op)
 		cpu.x[op.rd] = int64(addr) + op.imm
 	case 0b1101111: // JAL
 		op := parseJ(instr)
-		fmt.Printf("JAL %x\n", op)
 		cpu.x[op.rd] = int64(cpu.pc)
 		cpu.pc = addr + uint64(op.imm)
 	case 0b1100111:
-		panic("nyi - jalr")
+		op := parseI(instr)
+		rd := op.rd
+		if rd == 0 {
+			rd = 1
+		}
+		t := int64(cpu.pc)
+		cpu.pc = (uint64(cpu.x[op.rs1]+int64(op.imm)) >> 1) << 1
+		cpu.x[rd] = t
 	case 0b1100011:
 		op := parseB(instr)
 		switch op.funct3 {
 		case 0b000: // BEQ
-			fmt.Printf("BEQ %x\n", op)
 			if cpu.x[op.rs1] == cpu.x[op.rs2] {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		case 0b001: // BNE
-			fmt.Printf("BNE %x\n", op)
 			if cpu.x[op.rs1] != cpu.x[op.rs2] {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		case 0b100: // BLT
-			fmt.Printf("BLT %x\n", op)
 			if cpu.x[op.rs1] < cpu.x[op.rs2] {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		case 0b101: // BGE
-			fmt.Printf("BGE %x\n", op)
 			if cpu.x[op.rs1] >= cpu.x[op.rs2] {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		case 0b110: // BLTU
-			fmt.Printf("BLTU %x\n", op)
 			if uint64(cpu.x[op.rs1]) < uint64(cpu.x[op.rs2]) {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		case 0b111: // BGEU
-			fmt.Printf("BGEU %x\n", op)
 			if uint64(cpu.x[op.rs1]) >= uint64(cpu.x[op.rs2]) {
 				cpu.pc = addr + uint64(op.imm)
 			}
@@ -451,32 +447,39 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		op := parseI(instr)
 		switch op.funct3 {
 		case 0b000: // ADDI
-			fmt.Printf("ADDI %x\n", op)
 			cpu.x[op.rd] = cpu.x[op.rs1] + int64(op.imm)
 		case 0b010: // SLTI
-			fmt.Printf("SLTI %x\n", op)
-			panic("nyi - SLTI")
+			if cpu.x[op.rs1] < int64(op.imm) {
+				cpu.x[op.rd] = 1
+			} else {
+				cpu.x[op.rd] = 0
+			}
 		case 0b011: // SLTIU
-			fmt.Printf("SLTIU %x\n", op)
-			panic("nyi - SLTIU")
+			if uint64(cpu.x[op.rs1]) < uint64(int64(op.imm)) {
+				cpu.x[op.rd] = 1
+			} else {
+				cpu.x[op.rd] = 0
+			}
 		case 0b100: // XORI
-			fmt.Printf("ADDI %x\n", op)
 			cpu.x[op.rd] = cpu.x[op.rs1] ^ int64(op.imm)
 		case 0b110: // ORI
-			fmt.Printf("ORI %x\n", op)
 			cpu.x[op.rd] = cpu.x[op.rs1] | int64(op.imm)
 		case 0b111: // ANDI
-			fmt.Printf("ANDI %x\n", op)
 			cpu.x[op.rd] = cpu.x[op.rs1] & int64(op.imm)
 		case 0b001: // SLLI
-			fmt.Printf("SLLI %x\n", op)
 			if op.imm>>6 != 0 {
 				return false, IllegalInstruction, addr
 			}
 			cpu.x[op.rd] = cpu.x[op.rs1] << op.imm
-		case 0b101: // SR_I
-			fmt.Printf("SR_I %x\n", op)
-			panic("nyi - SR_I")
+		case 0b101:
+			switch op.imm >> 6 {
+			case 0: // SRLI
+				cpu.x[op.rd] = int64(uint64(cpu.x[op.rs1]) >> (op.imm & 0b111111))
+			case 0b0100000: // SRAI
+				cpu.x[op.rd] = cpu.x[op.rs1] >> (op.imm & 0b111111)
+			default:
+				return false, IllegalInstruction, addr
+			}
 		default:
 			return false, IllegalInstruction, addr
 		}
@@ -492,20 +495,35 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			default:
 				return false, IllegalInstruction, addr
 			}
-		case 0b001:
-			panic("nyi - SLL")
-		case 0b010:
-			panic("nyi - SLT")
-		case 0b011:
-			panic("nyi - SLTU")
-		case 0b100:
-			panic("nyi - XOR")
+		case 0b001: // SLL
+			cpu.x[op.rd] = cpu.x[op.rs1] << (cpu.x[op.rs2] & 0b111111)
+		case 0b010: // SLT
+			if cpu.x[op.rs1] < cpu.x[op.rs2] {
+				cpu.x[op.rd] = 1
+			} else {
+				cpu.x[op.rd] = 0
+			}
+		case 0b011: // SLTU
+			if uint64(cpu.x[op.rs1]) < uint64(cpu.x[op.rs2]) {
+				cpu.x[op.rd] = 1
+			} else {
+				cpu.x[op.rd] = 0
+			}
+		case 0b100: // XOR
+			cpu.x[op.rd] = cpu.x[op.rs1] ^ cpu.x[op.rs2]
 		case 0b101:
-			panic("nyi - SRL/SRA")
+			switch op.funct7 {
+			case 0: // SRL
+				cpu.x[op.rd] = int64(uint64(cpu.x[op.rs1]) >> (cpu.x[op.rs2] & 0b111111))
+			case 0b0100000: // SRA
+				cpu.x[op.rd] = cpu.x[op.rs1] >> (cpu.x[op.rs2] & 0b111111)
+			default:
+				return false, IllegalInstruction, addr
+			}
 		case 0b110:
-			panic("nyi - OR")
+			cpu.x[op.rd] = cpu.x[op.rs1] | cpu.x[op.rs2]
 		case 0b111:
-			panic("nyi - AND")
+			cpu.x[op.rd] = cpu.x[op.rs1] & cpu.x[op.rs2]
 		default:
 			return false, IllegalInstruction, addr
 		}
@@ -520,8 +538,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				return false, IllegalInstruction, addr
 			}
 			switch op.csr {
-			case 0:
-				fmt.Printf("ECALL %v\n", op)
+			case 0: // ECALL
 				switch cpu.priv {
 				case User:
 					return false, EnvironmentCallFromUMode, addr
@@ -545,20 +562,17 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			default:
 				return false, IllegalInstruction, addr
 			}
-		case 0b001:
-			fmt.Printf("CSRRW %v\n", op)
+		case 0b001: // CSRRW
 			t := cpu.csr[op.csr]
 			cpu.csr[op.csr] = uint64(cpu.x[op.rs])
 			cpu.x[op.rd] = int64(t)
-		case 0b010:
-			fmt.Printf("CSRRS %v\n", op)
+		case 0b010: // CSRRS
 			t := cpu.csr[op.csr]
 			cpu.csr[op.csr] |= uint64(cpu.x[op.rs])
 			cpu.x[op.rd] = int64(t)
-		case 0b011:
+		case 0b011: // CSRRC
 			panic("nyi - CSRRC")
-		case 0b101:
-			fmt.Printf("CSRRWI %v\n", op)
+		case 0b101: // CSRRWI
 			t := cpu.csr[op.csr]
 			cpu.csr[op.csr] = uint64(op.rs)
 			cpu.x[op.rd] = int64(t)
@@ -590,19 +604,21 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	case 0b0011011:
 		op := parseI(instr)
 		switch op.funct3 {
-		case 0b000:
-			fmt.Printf("ADDIW %v\n", op)
+		case 0b000: // ADDIW
 			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] + int64(op.imm)))
-		case 0b001:
-			fmt.Printf("SLLIW %v\n", op)
-			panic("nyi - SLLIW")
+		case 0b001: // SLLIW
+			if op.imm>>5 != 0 {
+				return false, IllegalInstruction, addr
+			}
+			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] << op.imm))
 		case 0b101:
-			if (op.imm>>11)&0b1 == 0b1 {
-				fmt.Printf("SRAIW %v\n", op)
-				panic("nyi - SRAIW")
-			} else {
-				fmt.Printf("SRLIW %v\n", op)
-				panic("nyi - SRLIW")
+			switch op.imm >> 6 {
+			case 0: // SRLIW
+				cpu.x[op.rd] = int64(int32(uint32(int32(cpu.x[op.rs1])) >> (op.imm & 0b111111)))
+			case 0b0100000: // SRAIW
+				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (op.imm & 0b111111))
+			default:
+				return false, IllegalInstruction, addr
 			}
 		default:
 			return false, IllegalInstruction, addr
@@ -682,7 +698,6 @@ func loadElf(file string, mem []byte) (uint64, error) {
 		return 0, err
 	}
 	defer f.Close()
-	fmt.Printf("%v\n", f.FileHeader)
 	for _, prog := range f.Progs {
 		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Memsz], 0)
 		if err != nil {
