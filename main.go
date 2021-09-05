@@ -753,6 +753,10 @@ func loadElf(file string, mem []byte) (uint64, error) {
 	}
 	defer f.Close()
 	for _, prog := range f.Progs {
+		if prog.Memsz == 0 {
+			fmt.Printf("warning: empty program section?\n")
+			continue
+		}
 		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Memsz], 0)
 		if err != nil {
 			return 0, err
