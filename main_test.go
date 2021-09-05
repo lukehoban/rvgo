@@ -16,7 +16,7 @@ func TestRiscvTests(t *testing.T) {
 		if strings.HasSuffix(file.Name(), ".dump") {
 			continue
 		}
-		// if file.Name() != "rv64ui-p-lwu" {
+		// if file.Name() != "rv64ui-p-srai" {
 		// 	continue
 		// }
 		t.Run(file.Name(), func(t *testing.T) {

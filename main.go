@@ -489,7 +489,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			switch op.imm >> 6 {
 			case 0: // SRLI
 				cpu.x[op.rd] = int64(uint64(cpu.x[op.rs1]) >> (op.imm & 0b111111))
-			case 0b0100000: // SRAI
+			case 0b010000: // SRAI
 				cpu.x[op.rd] = cpu.x[op.rs1] >> (op.imm & 0b111111)
 			default:
 				return false, IllegalInstruction, addr
@@ -629,7 +629,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			switch op.imm >> 6 {
 			case 0: // SRLIW
 				cpu.x[op.rd] = int64(int32(uint32(int32(cpu.x[op.rs1])) >> (op.imm & 0b111111)))
-			case 0b0100000: // SRAIW
+			case 0b010000: // SRAIW
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (op.imm & 0b111111))
 			default:
 				return false, IllegalInstruction, addr
