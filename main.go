@@ -598,7 +598,32 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			return false, IllegalInstruction, addr
 		}
 	case 0b0111011:
-		panic("nyi - M extensions")
+		op := parseR(instr)
+		switch op.funct3 {
+		case 0b000:
+			switch op.funct7 {
+			case 0b0000000: // ADD
+				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) + int32(cpu.x[op.rs2]))
+			case 0b0100000: // SUB
+				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) - int32(cpu.x[op.rs2]))
+			default:
+				return false, IllegalInstruction, addr
+			}
+		case 0b001:
+			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) << (cpu.x[op.rs2] & 0b11111))
+		case 0b101:
+			switch op.funct7 {
+			case 0: // SRL
+				cpu.x[op.rd] = int64(int32(uint32(uint64(cpu.x[op.rs1])) >> (cpu.x[op.rs2] & 0b11111)))
+			case 0b0100000: // SRA
+				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (cpu.x[op.rs2] & 0b11111))
+			default:
+				return false, IllegalInstruction, addr
+			}
+		default:
+			panic("nyi - 0111011")
+			// return false, IllegalInstruction, addr
+		}
 	case 0b0101111:
 		panic("nyi - A extensions")
 	case 0b0000111:
