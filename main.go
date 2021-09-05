@@ -336,7 +336,7 @@ type R struct {
 
 func parseR(instr uint32) R {
 	return R{
-		funct7: (instr >> 25) & 0x1111111,
+		funct7: (instr >> 25) & 0b1111111,
 		rs2:    (instr >> 20) & 0b11111,
 		rs1:    (instr >> 15) & 0b11111,
 		funct3: (instr >> 12) & 0b111,
@@ -355,7 +355,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	case 0b1101111: // JAL
 		op := parseJ(instr)
 		cpu.x[op.rd] = int64(cpu.pc)
-		cpu.pc = addr + uint64(op.imm)
+		cpu.pc = addr + uint64(int64(op.imm))
 	case 0b1100111:
 		op := parseI(instr)
 		rd := op.rd
@@ -488,9 +488,9 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		switch op.funct3 {
 		case 0b000:
 			switch op.funct7 {
-			case 0b0000000:
+			case 0b0000000: // ADD
 				cpu.x[op.rd] = cpu.x[op.rs1] + cpu.x[op.rs2]
-			case 0b0100000:
+			case 0b0100000: // SUB
 				cpu.x[op.rd] = cpu.x[op.rs1] - cpu.x[op.rs2]
 			default:
 				return false, IllegalInstruction, addr

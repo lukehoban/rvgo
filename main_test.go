@@ -16,6 +16,9 @@ func TestRiscvTests(t *testing.T) {
 		if strings.HasSuffix(file.Name(), ".dump") {
 			continue
 		}
+		// if file.Name() != "rv64ui-p-auipc" {
+		// 	continue
+		// }
 		t.Run(file.Name(), func(t *testing.T) {
 			mem := make([]byte, 0x100000000)
 			entry, err := loadElf(filepath.Join("testdata", file.Name()), mem)
