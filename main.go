@@ -100,7 +100,7 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	}
 
 	addr := cpu.pc
-	// fmt.Printf("%08d -- [%08x]: %08x %x\n", cpu.count, cpu.pc, instr, cpu.x)
+	fmt.Printf("%08d -- [%08x]: %08x %x\n", cpu.count, cpu.pc, instr, cpu.x)
 	if instr&0b11 == 0b11 {
 		cpu.pc += 4
 	} else {
@@ -624,7 +624,41 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			// return false, IllegalInstruction, addr
 		}
 	case 0b0101111:
-		panic("nyi - A extensions")
+		op := parseR(instr)
+		switch op.funct7 >> 2 {
+		case 0b00010:
+			panic("nyi - LR.W")
+		case 0b00011:
+			panic("nyi - SC.W")
+		case 0b00001:
+			panic("nyi - AMOSWAP.W")
+		case 0b00000:
+			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+			if !ok {
+				return false, reason, addr
+			}
+			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]+int64(int32(v))))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.x[op.rd] = int64(int32(v))
+		case 0b00100:
+			panic("nyi - AMOXOR.W")
+		case 0b01100:
+			panic("nyi - AMOAND.W")
+		case 0b01000:
+			panic("nyi - AMOOR.W")
+		case 0b10000:
+			panic("nyi - AMOMIN.W")
+		case 0b10100:
+			panic("nyi - AMOMAX.W")
+		case 0b11000:
+			panic("nyi - AMOMINU.W")
+		case 0b11100:
+			panic("nyi - AMOMAXU.W")
+		default:
+			panic("nyi - atomic")
+		}
 	case 0b0000111:
 		panic("nyi - flw")
 	case 0b0100111:
@@ -773,18 +807,55 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 	case 0b01:
 		switch funct3 {
 		case 0b000:
-			panic("nyi - C.NOP/C.ADDI")
-		case 0b001:
-			panic("nyi - C.JAL/C.ADDIW")
-		case 0b010:
+			r := instr & 0b111110000000
 			imm := (instr>>7)&0x20 | (instr>>2)&0x1f
 			if instr&0x1000 != 0 {
 				imm |= 0xffffffc0
 			}
-			return imm<<20 | (instr & 0b111110000000) | 0x13
-			// TODO: hint
+			if r == 0 && imm == 0 { // C.NOP = addi x0, x0, 0
+				return 0x13
+			} else { // C.ADDI = addi r, r, imm
+				return imm<<20 | r<<8 | r | 0x13
+			}
+		case 0b001:
+			panic("nyi - C.JAL/C.ADDIW")
+		case 0b010: // C.LI = addi rd, x0, imm
+			r := instr & 0b111110000000
+			imm := (instr>>7)&0x20 | (instr>>2)&0x1f
+			if instr&0x1000 != 0 {
+				imm |= 0xffffffc0
+			}
+			if r != 0 { // C.LI = addi rd, x0, imm
+				return imm<<20 | r | 0x13
+			} else { // hint
+				panic("nyi - hint")
+			}
 		case 0b011:
-			panic("nyi - C.ADDI16SP/C.LUI")
+			r := instr & 0b111110000000
+			if r == 0b100000000 {
+				imm := (instr>>3)&0x200 | (instr>>2)&0x10 | (instr<<1)&0x40 | (instr<<4)&0x180 | (instr<<3)&0x20
+				if instr&0x1000 != 0 {
+					imm |= 0xfffffc00
+				}
+				if imm != 0 { // C.ADDI16SP
+					return imm<<20 | r<<8 | r | 0x13
+				} else {
+					panic("reserved")
+				}
+
+			} else if r != 0 {
+				nzimm := (instr<<5)&0x20000 | (instr<<10)&0x1f000
+				if instr&0x1000 != 0 {
+					nzimm |= 0xfffc0
+				}
+				if nzimm != 0 {
+					return nzimm | r | 0x37
+				} else {
+					panic("nyi - reserved")
+				}
+			} else {
+				panic("nyi")
+			}
 		case 0b100:
 			panic("nyi - C.SRLI (and lots of others)")
 		case 0b101:
@@ -813,24 +884,24 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 				if rs1 == 0 {
 					panic("reserved")
 				} else {
-					if rs2 == 0 {
+					if rs2 == 0 { // C.JR
 						return (rs1 << 15) | 0x67
-					} else {
+					} else { // C.MV
 						return (rs2 << 20) | (rs1 << 7) | 0x33
 					}
 				}
 			} else {
 				if rs2 == 0 {
-					if rs1 == 0 {
-						panic("nyi - C.EBREAK")
-					} else {
-						panic("nyi - C.JALR")
+					if rs1 == 0 { // C.EBREAK
+						return 0x00100073
+					} else { // C.JALR
+						return (rs1 << 15) | (1 << 7) | 0x67
 					}
 				} else {
 					if rs1 == 0 {
 						panic("reserved")
-					} else {
-						panic("nyi - C.ADD")
+					} else { // C.ADD
+						return (rs2 << 20) | (rs1 << 15) | (rs1 << 7) | 0x33
 					}
 				}
 			}
@@ -838,8 +909,12 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			panic("nyi - C.FSDSP/C.SQSP")
 		case 0b110:
 			panic("nyi - C.SWSP")
-		case 0b111:
-			panic("nyi - C.FSWSP/C.SDSP")
+		case 0b111: // C.SDSP = sd rs, offset(x2)
+			rs2 := (instr >> 2) & 0x1f
+			offset := (instr>>7)&0x38 | (instr>>1)&0x1c0
+			imm115 := (offset >> 5) & 0x3f
+			imm40 := offset & 0x1f
+			return imm115<<25 | rs2<<20 | 2<<15 | 3<<12 | imm40<<7 | 0x23
 		default:
 			panic("unreachable")
 		}
