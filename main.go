@@ -6,10 +6,11 @@ import (
 )
 
 const (
-	MVENDORID  = 0xF11
-	MARCHID    = 0xF12
-	MIMPID     = 0xF13
-	MHARTID    = 0xF14
+	MVENDORID = 0xF11
+	MARCHID   = 0xF12
+	MIMPID    = 0xF13
+	MHARTID   = 0xF14
+
 	MSTATUS    = 0x300
 	MISA       = 0x301
 	MEDELEG    = 0x302
@@ -22,6 +23,31 @@ const (
 	MCAUSE     = 0x342
 	MTVAL      = 0x343
 	MIP        = 0x344
+
+	SSTATUS    = 0x100
+	SEDELEG    = 0x102
+	SIDELEG    = 0x103
+	SIE        = 0x104
+	STVEC      = 0x105
+	SCOUNTEREN = 0x106
+	SSCRATCH   = 0x140
+	SEPC       = 0x141
+	SCAUSE     = 0x142
+	STVAL      = 0x143
+	SIP        = 0x144
+	SATP       = 0x180
+
+	USTATUS  = 0x000
+	UIE      = 0x004
+	UTVEC    = 0x005
+	USCRATCH = 0x040
+	UEPC     = 0x041
+	UCAUSE   = 0x042
+	UTVAL    = 0x043
+	UIP      = 0x044
+	CYCLE    = 0xC00
+	TIME     = 0xC01
+	INSTRET  = 0xC02
 )
 
 type Privilege uint8
@@ -51,21 +77,28 @@ func NewCPU(mem []byte, pc uint64) CPU {
 	}
 }
 
-func (cpu *CPU) run() error {
+func (cpu *CPU) run() {
 	for {
-		err := cpu.step()
-		if err != nil {
-			return err
-		}
+		cpu.step()
 	}
 }
 
-func (cpu *CPU) step() error {
-	instr, err := cpu.fetch()
-	if err != nil {
-		return err
+func (cpu *CPU) step() {
+	addr := cpu.pc
+	ok, reason, trapaddr := cpu.stepInner()
+	if !ok {
+		cpu.exception(reason, trapaddr, addr)
 	}
+	cpu.interrupt(cpu.pc)
 	cpu.count++
+}
+
+func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
+	instr, ok, reason := cpu.fetch()
+	if !ok {
+		return false, reason, cpu.pc
+	}
+
 	addr := cpu.pc
 	fmt.Printf("%08d -- [%08x]: %08x %x\n", cpu.count, cpu.pc, instr, cpu.x)
 	if instr&0b11 == 0b11 {
@@ -75,18 +108,116 @@ func (cpu *CPU) step() error {
 		instr &= 0xFFFF
 		panic(fmt.Sprintf("nyi: compressed: %08x", instr))
 	}
-	err = cpu.exec(instr, addr)
-	if err != nil {
-		return err
-	}
-
+	ok, reason, trapaddr := cpu.exec(instr, addr)
 	cpu.x[0] = 0
-
-	return nil
+	if !ok {
+		return false, reason, trapaddr
+	}
+	return true, 0, 0
 }
 
-func (cpu *CPU) fetch() (uint32, error) {
+func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
 	return cpu.readuint32(cpu.pc)
+}
+
+type TrapReason int64
+
+const (
+	UserSoftwareInterrupt       TrapReason = 0x800000000000000
+	SupervisorSoftwareInterrupt TrapReason = 0x800000000000001
+	HypervisorSoftwareInterrupt TrapReason = 0x800000000000002
+	MachineSoftwareInterrupt    TrapReason = 0x800000000000003
+	UserTimerInterrupt          TrapReason = 0x800000000000004
+	SupervisorTimerInterrupt    TrapReason = 0x800000000000005
+	HypervisorTimerInterrupt    TrapReason = 0x800000000000006
+	MachineTimerInterrupt       TrapReason = 0x800000000000007
+	UserExternalInterrupt       TrapReason = 0x800000000000008
+	SupervisorExternalInterrupt TrapReason = 0x800000000000009
+	HypervisorExternalInterrupt TrapReason = 0x80000000000000A
+	MachineExternalInterrupt    TrapReason = 0x80000000000000B
+
+	InstructionAddressMisaligned TrapReason = 0x000000000000000
+	InstructionAccessFault       TrapReason = 0x000000000000001
+	IllegalInstruction           TrapReason = 0x000000000000002
+	Breakpoint                   TrapReason = 0x000000000000003
+	LoadAddressMisaligned        TrapReason = 0x000000000000004
+	LoadAccessFault              TrapReason = 0x000000000000005
+	StoreAddressMisaligned       TrapReason = 0x000000000000006
+	StoreAccessFault             TrapReason = 0x000000000000007
+	EnvironmentCallFromUMode     TrapReason = 0x000000000000008
+	EnvironmentCallFromSMode     TrapReason = 0x000000000000009
+	EnvironmentCallFromHMode     TrapReason = 0x00000000000000A
+	EnvironmentCallFromMMode     TrapReason = 0x00000000000000B
+	InstructionPageFault         TrapReason = 0x00000000000000C
+	LoadPageFault                TrapReason = 0x00000000000000D
+	StorePageFault               TrapReason = 0x00000000000000F
+)
+
+func (cpu *CPU) exception(reason TrapReason, trapaddr uint64, instructionaddr uint64) {
+	cpu.trap(reason, trapaddr, instructionaddr, false)
+}
+
+func (cpu *CPU) interrupt(pc uint64) {
+	// TODO: handle interrupts
+}
+
+func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool) bool {
+	fmt.Printf("trap: %v %v %v %v\n", reason, trapaddr, addr, isInterrupt)
+
+	var mdeleg, sdeleg uint64
+	if isInterrupt {
+		mdeleg, sdeleg = cpu.csr[MIDELEG], cpu.csr[SIDELEG]
+	} else {
+		mdeleg, sdeleg = cpu.csr[MEDELEG], cpu.csr[SEDELEG]
+	}
+	pos := uint64(reason) & 0xFFFF
+
+	var handlePriv Privilege
+	if (mdeleg>>pos)&1 == 0 {
+		handlePriv = Machine
+	} else if (sdeleg>>pos)&1 == 0 {
+		handlePriv = Supervisor
+	} else {
+		handlePriv = User
+	}
+
+	// TODO: Decision about whether to take trap
+
+	cpu.priv = handlePriv
+
+	var epcAddr, causeAddr, tvalAddr, tvecAddr uint64
+	switch cpu.priv {
+	case Machine:
+		epcAddr, causeAddr, tvalAddr, tvecAddr = MEPC, MCAUSE, MTVAL, MTVEC
+	case User:
+		epcAddr, causeAddr, tvalAddr, tvecAddr = UEPC, UCAUSE, UTVAL, UTVEC
+	default:
+		panic("not yet implemented non-machine privilege")
+	}
+
+	cpu.csr[epcAddr] = addr
+	cpu.csr[causeAddr] = uint64(reason)
+	cpu.csr[tvalAddr] = trapaddr
+	cpu.pc = cpu.csr[tvecAddr]
+	if (cpu.pc & 0b11) != 0 {
+		panic("vector type address")
+		cpu.pc = (cpu.pc>>2)<<2 + (4 * (uint64(reason) & 0xFFFF))
+	}
+
+	switch cpu.priv {
+	case Machine:
+		cpu.setMPIE(cpu.getMIE())
+		cpu.setMIE(0)
+		cpu.setMPP(uint64(cpu.priv))
+	case User:
+		cpu.setMPIE(cpu.getMIE())
+		cpu.setMIE(0)
+		cpu.setMPP(uint64(cpu.priv))
+	default:
+		panic("not yet implemented non-machine privilege")
+	}
+
+	return true
 }
 
 type I struct {
@@ -197,7 +328,25 @@ func parseCSR(instr uint32) CSR {
 	}
 }
 
-func (cpu *CPU) exec(instr uint32, addr uint64) error {
+type R struct {
+	funct7 uint32
+	rs2    uint32
+	rs1    uint32
+	funct3 uint32
+	rd     uint32
+}
+
+func parseR(instr uint32) R {
+	return R{
+		funct7: (instr >> 25) & 0x1111111,
+		rs2:    (instr >> 20) & 0b11111,
+		rs1:    (instr >> 15) & 0b11111,
+		funct3: (instr >> 12) & 0b111,
+		rd:     (instr >> 7) & 0b11111,
+	}
+}
+
+func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	switch instr & 0x7f {
 	case 0b0110111: // LUI
 		op := parseU(instr)
@@ -248,43 +397,43 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		default:
-			return fmt.Errorf("invalid branch op funct3: %x", op.funct3)
+			return false, IllegalInstruction, addr
 		}
 	case 0b0000011:
 		op := parseI(instr)
 		switch op.funct3 {
 		case 0b000: // LB
-			data, err := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
-			if err != nil {
-				return err
+			data, ok, reason := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
 			}
 			cpu.x[op.rd] = int64(int8(data))
 		case 0b001: // LH
-			data, err := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
-			if err != nil {
-				return err
+			data, ok, reason := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
 			}
 			cpu.x[op.rd] = int64(int16(data))
 		case 0b010: // LW
-			data, err := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
-			if err != nil {
-				return err
+			data, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
 			}
 			cpu.x[op.rd] = int64(int32(data))
 		case 0b100: // LBU
-			data, err := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
-			if err != nil {
-				return err
+			data, ok, reason := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
 			}
 			cpu.x[op.rd] = int64(data)
 		case 0b101: // LHU
-			data, err := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
-			if err != nil {
-				return err
+			data, ok, reason := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			if !ok {
+				return false, reason, addr
 			}
 			cpu.x[op.rd] = int64(data)
 		default:
-			return fmt.Errorf("invalid load op funct3: %x", op.funct3)
+			return false, IllegalInstruction, addr
 		}
 	case 0b0100011:
 		op := parseS(instr)
@@ -296,7 +445,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 		case 0b010: // SW
 			cpu.writeuint32(uint64(cpu.x[op.rs1]+int64(op.imm)), uint32(cpu.x[op.rs2]))
 		default:
-			return fmt.Errorf("invalid store op funct3: %x", op.funct3)
+			return false, IllegalInstruction, addr
 		}
 	case 0b0010011:
 		op := parseI(instr)
@@ -322,29 +471,69 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 		case 0b001: // SLLI
 			fmt.Printf("SLLI %x\n", op)
 			if op.imm>>6 != 0 {
-				return fmt.Errorf("invalid shamt %x", op.funct3)
+				return false, IllegalInstruction, addr
 			}
 			cpu.x[op.rd] = cpu.x[op.rs1] << op.imm
 		case 0b101: // SR_I
 			fmt.Printf("SR_I %x\n", op)
 			panic("nyi - SR_I")
 		default:
-			return fmt.Errorf("invalid arith op funct3: %x", op.funct3)
+			return false, IllegalInstruction, addr
 		}
 	case 0b0110011:
-		panic("nyi - arith")
+		op := parseR(instr)
+		switch op.funct3 {
+		case 0b000:
+			switch op.funct7 {
+			case 0b0000000:
+				cpu.x[op.rd] = cpu.x[op.rs1] + cpu.x[op.rs2]
+			case 0b0100000:
+				cpu.x[op.rd] = cpu.x[op.rs1] - cpu.x[op.rs2]
+			default:
+				return false, IllegalInstruction, addr
+			}
+		case 0b001:
+			panic("nyi - SLL")
+		case 0b010:
+			panic("nyi - SLT")
+		case 0b011:
+			panic("nyi - SLTU")
+		case 0b100:
+			panic("nyi - XOR")
+		case 0b101:
+			panic("nyi - SRL/SRA")
+		case 0b110:
+			panic("nyi - OR")
+		case 0b111:
+			panic("nyi - AND")
+		default:
+			return false, IllegalInstruction, addr
+		}
+
 	case 0b0001111:
-		panic("nyi - fence")
+		// Do nothing?
 	case 0b1110011:
 		op := parseCSR(instr)
 		switch op.funct3 {
 		case 0b000:
 			if op.funct3 != 0 || op.rd != 0 || op.rs != 0 {
-				return fmt.Errorf("invalid op ECALL/EBREAK: %x", op)
+				return false, IllegalInstruction, addr
 			}
 			switch op.csr {
 			case 0:
-				panic("nyi - ECALL")
+				fmt.Printf("ECALL %v\n", op)
+				switch cpu.priv {
+				case User:
+					return false, EnvironmentCallFromUMode, addr
+				case Supervisor:
+					return false, EnvironmentCallFromSMode, addr
+				case Hypervisor:
+					return false, EnvironmentCallFromHMode, addr
+				case Machine:
+					return false, EnvironmentCallFromMMode, addr
+				default:
+					panic("invalid CPU privilege")
+				}
 			case 1:
 				panic("nyi - EBREAK")
 			case 0b001100000010:
@@ -352,10 +541,9 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 				cpu.priv = cpu.getMPP()
 				cpu.setMIE(cpu.getMPIE())
 				cpu.setMPIE(1)
-				// TODO: When we support user mode, go back to user mode on MRET?
-				//cpu.setMPP(0)
+				cpu.setMPP(0)
 			default:
-				return fmt.Errorf("invalid op ECALL/EBREAK: %x", op)
+				return false, IllegalInstruction, addr
 			}
 		case 0b001:
 			fmt.Printf("CSRRW %v\n", op)
@@ -379,7 +567,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 		case 0b111:
 			panic("nyi - CSRRCI")
 		default:
-			return fmt.Errorf("invalid csr op funct3: %x", op.funct3)
+			return false, IllegalInstruction, addr
 		}
 	case 0b0111011:
 		panic("nyi - M extensions")
@@ -401,7 +589,6 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 		panic("nyi - F extension")
 	case 0b0011011:
 		op := parseI(instr)
-
 		switch op.funct3 {
 		case 0b000:
 			fmt.Printf("ADDIW %v\n", op)
@@ -418,16 +605,24 @@ func (cpu *CPU) exec(instr uint32, addr uint64) error {
 				panic("nyi - SRLIW")
 			}
 		default:
-			return fmt.Errorf("invalid op %x funct3: %x", instr&0x7f, op.funct3)
+			return false, IllegalInstruction, addr
 		}
 	default:
 		panic(fmt.Sprintf("nyi - opcode %x", instr&0x7f))
 	}
-	return nil
+	return true, 0, 0
 }
 
 func (cpu *CPU) getMPP() Privilege {
 	return Privilege((cpu.csr[MSTATUS] >> 11) & 0b11)
+}
+
+func (cpu *CPU) setMPP(v uint64) {
+	cpu.csr[MSTATUS] |= (v & 0b11) << 11
+}
+
+func (cpu *CPU) getMIE() uint64 {
+	return (cpu.csr[MSTATUS] >> 3) & 0b1
 }
 
 func (cpu *CPU) setMIE(v uint64) {
@@ -442,70 +637,73 @@ func (cpu *CPU) setMPIE(v uint64) {
 	cpu.csr[MSTATUS] |= (v & 0b1) << 7
 }
 
-func (cpu *CPU) readuint32(addr uint64) (uint32, error) {
+func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
 	val := uint32(0)
 	for i := uint64(0); i < 4; i++ {
 		val |= (uint32(cpu.mem[addr+i]) << (i * 8))
 	}
-	return val, nil
+	return val, true, 0
 }
 
-func (cpu *CPU) readuint16(addr uint64) (uint16, error) {
+func (cpu *CPU) readuint16(addr uint64) (uint16, bool, TrapReason) {
 	val := uint16(0)
 	for i := uint64(0); i < 2; i++ {
 		val |= (uint16(cpu.mem[addr+i]) << (i * 8))
 	}
-	return val, nil
+	return val, true, 0
 }
 
-func (cpu *CPU) readuint8(addr uint64) (uint8, error) {
-	return uint8(cpu.mem[addr]), nil
+func (cpu *CPU) readuint8(addr uint64) (uint8, bool, TrapReason) {
+	return uint8(cpu.mem[addr]), true, 0
 }
 
-func (cpu *CPU) writeuint32(addr uint64, val uint32) {
+func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, TrapReason) {
 	for i := uint64(0); i < 4; i++ {
 		cpu.mem[addr+i] = byte(val >> (i * 8))
 	}
+	return true, 0
 }
 
-func (cpu *CPU) writeuint16(addr uint64, val uint16) {
+func (cpu *CPU) writeuint16(addr uint64, val uint16) (bool, TrapReason) {
 	for i := uint64(0); i < 2; i++ {
 		cpu.mem[addr+i] = byte(val >> (i * 8))
 	}
+	return true, 0
 }
 
-func (cpu *CPU) writeuint8(addr uint64, val uint8) {
+func (cpu *CPU) writeuint8(addr uint64, val uint8) (bool, TrapReason) {
 	cpu.mem[addr] = byte(val)
+	return true, 0
 }
 
-func do() error {
-	mem := make([]byte, 0x100000000)
-
-	f, err := elf.Open("rv64ui-p-add")
+func loadElf(file string, mem []byte) (uint64, error) {
+	f, err := elf.Open(file)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	defer f.Close()
 	fmt.Printf("%v\n", f.FileHeader)
 	for _, prog := range f.Progs {
 		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Memsz], 0)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if n != int(prog.Memsz) {
-			return fmt.Errorf("didn't read full section")
+			return 0, fmt.Errorf("didn't read full section")
 		}
 	}
-	err = f.Close()
+	return f.Entry, nil
+}
+
+func do() error {
+	mem := make([]byte, 0x100000000)
+	entry, err := loadElf("rv64ui-p-add", mem)
 	if err != nil {
 		return err
 	}
 
-	cpu := NewCPU(mem, f.Entry)
-	err = cpu.run()
-	if err != nil {
-		return err
-	}
-
+	cpu := NewCPU(mem, entry)
+	cpu.run()
 	return nil
 }
 
