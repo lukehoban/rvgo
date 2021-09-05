@@ -105,8 +105,7 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 		cpu.pc += 4
 	} else {
 		cpu.pc += 2
-		instr &= 0xFFFF
-		panic(fmt.Sprintf("nyi: compressed: %08x", instr))
+		instr = cpu.decompress(instr & 0xFFFF)
 	}
 	ok, reason, trapaddr := cpu.exec(instr, addr)
 	cpu.x[0] = 0
@@ -744,6 +743,109 @@ func (cpu *CPU) writeuint16(addr uint64, val uint16) (bool, TrapReason) {
 func (cpu *CPU) writeuint8(addr uint64, val uint8) (bool, TrapReason) {
 	cpu.mem[addr] = byte(val)
 	return true, 0
+}
+
+func (cpu *CPU) decompress(instr uint32) uint32 {
+	op := instr & 0b11
+	funct3 := (instr >> 13) & 0b111
+	switch op {
+	case 0b00:
+		switch funct3 {
+		case 0b000:
+			panic("nyi - C.ADDI4SPN")
+		case 0b001:
+			panic("nyi - C.FLD/C.LQ")
+		case 0b010:
+			panic("nyi - C.LW")
+		case 0b011:
+			panic("nyi - C.FLW/C.LD")
+		case 0b100:
+			panic("nyi - reserved")
+		case 0b101:
+			panic("nyi - C.FSD/C.SQ")
+		case 0b110:
+			panic("nyi - C.SW")
+		case 0b111:
+			panic("nyi - C.FSW/C.SD")
+		default:
+			panic("unreachable")
+		}
+	case 0b01:
+		switch funct3 {
+		case 0b000:
+			panic("nyi - C.NOP/C.ADDI")
+		case 0b001:
+			panic("nyi - C.JAL/C.ADDIW")
+		case 0b010:
+			imm := (instr>>7)&0x20 | (instr>>2)&0x1f
+			if instr&0x1000 != 0 {
+				imm |= 0xffffffc0
+			}
+			return imm<<20 | (instr & 0b111110000000) | 0x13
+			// TODO: hint
+		case 0b011:
+			panic("nyi - C.ADDI16SP/C.LUI")
+		case 0b100:
+			panic("nyi - C.SRLI (and lots of others)")
+		case 0b101:
+			panic("nyi - C.J")
+		case 0b110:
+			panic("nyi - C.BEQZ")
+		case 0b111:
+			panic("nyi - C.BNEZ")
+		default:
+			panic("unreachable")
+		}
+	case 0b10:
+		switch funct3 {
+		case 0b000:
+			panic("nyi - C.SLLI/C.SLLI64")
+		case 0b001:
+			panic("nyi - C.FLDSP/C.LQSP")
+		case 0b010:
+			panic("nyi - C.LWSP")
+		case 0b011:
+			panic("nyi - C.FLWSP/C.LDSP")
+		case 0b100:
+			rs1 := (instr >> 7) & 0b11111
+			rs2 := (instr >> 2) & 0b11111
+			if instr&0x1000 == 0 {
+				if rs1 == 0 {
+					panic("reserved")
+				} else {
+					if rs2 == 0 {
+						return (rs1 << 15) | 0x67
+					} else {
+						return (rs2 << 20) | (rs1 << 7) | 0x33
+					}
+				}
+			} else {
+				if rs2 == 0 {
+					if rs1 == 0 {
+						panic("nyi - C.EBREAK")
+					} else {
+						panic("nyi - C.JALR")
+					}
+				} else {
+					if rs1 == 0 {
+						panic("reserved")
+					} else {
+						panic("nyi - C.ADD")
+					}
+				}
+			}
+		case 0b101:
+			panic("nyi - C.FSDSP/C.SQSP")
+		case 0b110:
+			panic("nyi - C.SWSP")
+		case 0b111:
+			panic("nyi - C.FSWSP/C.SDSP")
+		default:
+			panic("unreachable")
+		}
+	default:
+		panic("compressed instruction cannot be 0b11")
+	}
 }
 
 func loadElf(file string, mem []byte) (uint64, error) {
