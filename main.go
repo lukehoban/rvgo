@@ -786,7 +786,14 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 	case 0b00:
 		switch funct3 {
 		case 0b000:
-			panic("nyi - C.ADDI4SPN")
+			rd := (instr >> 2) & 0x7
+			nzuimm := (instr>>7)&0x30 | (instr>>1)&0x3c0 | (instr>>4)&0x4 | (instr>>2)&0x8
+
+			if nzuimm != 0 { // C.ADDI4SPN = addi rd+8, x2, nzuimm
+				return nzuimm<<20 | 2<<15 | (rd+8)<<7 | 0x13
+			} else {
+				panic("reserved")
+			}
 		case 0b001:
 			panic("nyi - C.FLD/C.LQ")
 		case 0b010:
@@ -842,7 +849,6 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 				} else {
 					panic("reserved")
 				}
-
 			} else if r != 0 {
 				nzimm := (instr<<5)&0x20000 | (instr<<10)&0x1f000
 				if instr&0x1000 != 0 {
@@ -857,11 +863,60 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 				panic("nyi")
 			}
 		case 0b100:
-			panic("nyi - C.SRLI (and lots of others)")
+			funct2 := (instr >> 10) & 0x3
+			switch funct2 {
+			case 0b00:
+				panic("nyi - C.SRLI")
+			case 0b01:
+				panic("nyi - C.SRAI")
+			case 0b10:
+				panic("nyi - C.ANDI")
+			case 0b11:
+				funct1 := (instr >> 12) & 1
+				funct22 := (instr >> 5) & 0x3
+				rs1 := (instr >> 7) & 0x7
+				rs2 := (instr >> 2) & 0x7
+				switch funct1 {
+				case 0:
+					switch funct22 {
+					case 0b00: // C.SUB = sub rs1+8, rs1+8, rs2+8
+						return 0x20<<25 | (rs2+8)<<20 | (rs1+8)<<15 | (rs1+8)<<7 | 0x33
+					case 0b01: // C.XOR = xor rs1+8, rs1+8, rs2+8
+						return (rs2+8)<<20 | (rs1+8)<<15 | 4<<12 | (rs1+8)<<7 | 0x33
+					case 0b10: // C.OR = or rs1+8, rs1+8, rs2+8
+						return (rs2+8)<<20 | (rs1+8)<<15 | 6<<12 | (rs1+8)<<7 | 0x33
+					case 0b11: // C.AND = and rs1+8, rs1+8, rs2+8
+						return (rs2+8)<<20 | (rs1+8)<<15 | 7<<12 | (rs1+8)<<7 | 0x33
+					default:
+						panic("unreachable")
+					}
+				case 1:
+					switch funct22 {
+					case 0b00: // C.SUBW = subw r1+8, r1+8, r2+8
+						return 0x20<<25 | (rs2+8)<<20 | (rs1+8)<<15 | (rs1+8)<<7 | 0x3b
+					case 0b01: // C.ADDW = addw r1+8, r1+8, r2+8
+						return (rs2+8)<<20 | (rs1+8)<<15 | (rs1+8)<<7 | 0x3b
+					case 0b10:
+						panic("reserved")
+					case 0b11:
+						panic("reserved")
+					default:
+						panic("unreachable")
+					}
+				default:
+					panic("unreachable")
+				}
+			default:
+				panic("unreachable")
+			}
 		case 0b101:
 			panic("nyi - C.J")
-		case 0b110:
-			panic("nyi - C.BEQZ")
+		case 0b110: // C.BEQZ = beq r+8, x0, offset
+			r := (instr >> 7) & 0x7
+			offset := (instr>>4)&0x100 | (instr>>7)&0x18 | (instr<<1)&0xc0 | (instr>>2)&0x6 | (instr<<3)&0x20
+			imm2 := (offset>>6)&0x40 | (offset>>5)&0x3f
+			imm1 := (offset>>0)&0x1e | (offset>>11)&0x1
+			return imm2<<25 | (r+8)<<20 | imm1<<7 | 0x63
 		case 0b111:
 			panic("nyi - C.BNEZ")
 		default:
@@ -875,8 +930,14 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			panic("nyi - C.FLDSP/C.LQSP")
 		case 0b010:
 			panic("nyi - C.LWSP")
-		case 0b011:
-			panic("nyi - C.FLWSP/C.LDSP")
+		case 0b011: // C.LDSP = ld rd, offset(x2)
+			rd := (instr >> 7) & 0x1f
+			offset := (instr>>7)&0x20 | (instr>>2)&0x18 | (instr<<4)&0x1c0
+			if rd != 0 {
+				return offset<<20 | 2<<15 | 3<<12 | rd<<7 | 0x3
+			} else {
+				panic("reserved")
+			}
 		case 0b100:
 			rs1 := (instr >> 7) & 0b11111
 			rs2 := (instr >> 2) & 0b11111
