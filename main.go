@@ -812,6 +812,10 @@ func (cpu *CPU) readraw(addr uint64) uint8 {
 		return cpu.mem[addr]
 	}
 	if addr >= 0x00001020 && addr <= 0x00001fff {
+		daddr := addr - 0x00001020
+		if daddr >= uint64(len(dtb)) {
+			return 0
+		}
 		return dtb[addr-0x00001020]
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
