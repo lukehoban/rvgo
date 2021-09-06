@@ -526,42 +526,87 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				cpu.x[op.rd] = cpu.x[op.rs1] + cpu.x[op.rs2]
 			case 0b0100000: // SUB
 				cpu.x[op.rd] = cpu.x[op.rs1] - cpu.x[op.rs2]
+			case 0b0000001: // MUL
+				cpu.x[op.rd] = cpu.x[op.rs1] * cpu.x[op.rs2]
 			default:
 				panic("invalid insruction")
 			}
-		case 0b001: // SLL
-			cpu.x[op.rd] = cpu.x[op.rs1] << (cpu.x[op.rs2] & 0b111111)
-		case 0b010: // SLT
-			if cpu.x[op.rs1] < cpu.x[op.rs2] {
-				cpu.x[op.rd] = 1
-			} else {
-				cpu.x[op.rd] = 0
+		case 0b001:
+			switch op.funct7 {
+			case 0: // SLL
+				cpu.x[op.rd] = cpu.x[op.rs1] << (cpu.x[op.rs2] & 0b111111)
+			case 1: // MULH
+				panic("nyi - MULH")
+			default:
+				panic("invalid insruction")
 			}
-		case 0b011: // SLTU
-			if uint64(cpu.x[op.rs1]) < uint64(cpu.x[op.rs2]) {
-				cpu.x[op.rd] = 1
-			} else {
-				cpu.x[op.rd] = 0
+		case 0b010:
+			switch op.funct7 {
+			case 0: // SLT
+				if cpu.x[op.rs1] < cpu.x[op.rs2] {
+					cpu.x[op.rd] = 1
+				} else {
+					cpu.x[op.rd] = 0
+				}
+			case 1: // MULHSU
+				panic("nyi - MULHSU")
+			default:
+				panic("invalid insruction")
 			}
-		case 0b100: // XOR
-			cpu.x[op.rd] = cpu.x[op.rs1] ^ cpu.x[op.rs2]
+		case 0b011:
+			switch op.funct7 {
+			case 0: // SLTU
+				if uint64(cpu.x[op.rs1]) < uint64(cpu.x[op.rs2]) {
+					cpu.x[op.rd] = 1
+				} else {
+					cpu.x[op.rd] = 0
+				}
+			case 1: // MULHU
+				panic("nyi - MULHU")
+			default:
+				panic("invalid insruction")
+			}
+		case 0b100:
+			switch op.funct7 {
+			case 0: // XOR
+				cpu.x[op.rd] = cpu.x[op.rs1] ^ cpu.x[op.rs2]
+			case 1: // DIV
+				panic("nyi - DIV")
+			default:
+				panic("invalid insruction")
+			}
 		case 0b101:
 			switch op.funct7 {
 			case 0: // SRL
 				cpu.x[op.rd] = int64(uint64(cpu.x[op.rs1]) >> (cpu.x[op.rs2] & 0b111111))
 			case 0b0100000: // SRA
 				cpu.x[op.rd] = cpu.x[op.rs1] >> (cpu.x[op.rs2] & 0b111111)
+			case 1: // DIVU
+				panic("nyi - DIVU")
 			default:
 				panic("invalid insruction")
 			}
 		case 0b110:
-			cpu.x[op.rd] = cpu.x[op.rs1] | cpu.x[op.rs2]
+			switch op.funct7 {
+			case 0: // OR
+				cpu.x[op.rd] = cpu.x[op.rs1] | cpu.x[op.rs2]
+			case 1: // REM
+				panic("nyi - REM")
+			default:
+				panic("invalid insruction")
+			}
 		case 0b111:
-			cpu.x[op.rd] = cpu.x[op.rs1] & cpu.x[op.rs2]
+			switch op.funct7 {
+			case 0: // AND
+				cpu.x[op.rd] = cpu.x[op.rs1] & cpu.x[op.rs2]
+			case 1: // REMU
+				panic("nyi - REMU")
+			default:
+				panic("invalid insruction")
+			}
 		default:
 			panic("invalid insruction")
 		}
-
 	case 0b0001111:
 		// Do nothing?
 	case 0b1110011:
@@ -878,16 +923,27 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			}
 		case 0b001:
 			panic("nyi - C.FLD/C.LQ")
-		case 0b010:
-			panic("nyi - C.LW")
-		case 0b011:
-			panic("nyi - C.FLW/C.LD")
+		case 0b010: // C.LW = lw rd+8, offset(rs1+8)
+			rs1 := (instr >> 7) & 0x7
+			rd := (instr >> 2) & 0x7
+			offset := (instr>>7)&0x38 | (instr<<1)&0x40 | (instr>>4)&0x4
+			return offset<<20 | (rs1+8)<<15 | 2<<12 | (rd+8)<<7 | 0x3
+		case 0b011: // C.LD = ld rd+8, offset(rs1+8)
+			rs1 := (instr >> 7) & 0x7
+			rd := (instr >> 2) & 0x7
+			offset := (instr>>7)&0x38 | (instr<<1)&0xc0
+			return offset<<20 | (rs1+8)<<15 | 3<<12 | (rd+8)<<7 | 0x3
 		case 0b100:
 			panic("nyi - reserved")
 		case 0b101:
 			panic("nyi - C.FSD/C.SQ")
-		case 0b110:
-			panic("nyi - C.SW")
+		case 0b110: // C.SW = sw rs2+8, offset(rs1+8)
+			rs1 := (instr >> 7) & 0x7
+			rs2 := (instr >> 2) & 0x7
+			offset := (instr>>7)&0x38 | (instr<<1)&0x40 | (instr>>4)&0x4
+			imm115 := (offset >> 5) & 0x3f
+			imm40 := offset & 0x1f
+			return imm115<<25 | (rs2+8)<<20 | (rs1+8)<<15 | 2<<12 | imm40<<7 | 0x23
 		case 0b111:
 			panic("nyi - C.FSW/C.SD")
 		default:
@@ -956,8 +1012,10 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 		case 0b100:
 			funct2 := (instr >> 10) & 0x3
 			switch funct2 {
-			case 0b00:
-				panic("nyi - C.SRLI")
+			case 0b00: // C.SRLI = srli rs1+8, rs1+8, shamt
+				rs1 := (instr >> 7) & 0x7
+				shamt := (instr>>7)&0x20 | (instr>>2)&0x1f
+				return shamt<<20 | (rs1+8)<<15 | 5<<12 | (rs1+8)<<7 | 0x13
 			case 0b01:
 				panic("nyi - C.SRAI")
 			case 0b10:
@@ -1030,8 +1088,14 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 		}
 	case 0b10:
 		switch funct3 {
-		case 0b000:
-			panic("nyi - C.SLLI/C.SLLI64")
+		case 0b000: // C.SLLI = slli r, r, shamt
+			r := (instr >> 7) & 0x1f
+			shamt := (instr>>7)&0x20 | (instr>>2)&0x1f
+			if r != 0 {
+				return shamt<<20 | r<<15 | 1<<12 | r<<7 | 0x13
+			} else {
+				panic("reserved")
+			}
 		case 0b001:
 			panic("nyi - C.FLDSP/C.LQSP")
 		case 0b010:
