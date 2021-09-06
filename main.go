@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const DEBUG = true
+const DEBUG = false
 
 const (
 	MVENDORID = 0xF11
@@ -56,6 +56,15 @@ const (
 	INSTRET  = 0xC02
 )
 
+const (
+	MIP_MEIP = 0x800
+	MIP_MTIP = 0x080
+	MIP_MSIP = 0x008
+	MIP_SEIP = 0x200
+	MIP_STIP = 0x020
+	MIP_SSIP = 0x002
+)
+
 type Privilege uint8
 
 const (
@@ -77,6 +86,7 @@ type CPU struct {
 	priv Privilege
 	wfi  bool
 	uart Uart
+	plic Plic
 
 	count uint64
 }
@@ -87,6 +97,7 @@ func NewCPU(mem []byte, pc uint64) CPU {
 		mem:  mem,
 		priv: Machine,
 		uart: NewUart(),
+		plic: NewPlic(),
 	}
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
@@ -106,10 +117,12 @@ func (cpu *CPU) step() {
 	if !ok {
 		cpu.exception(reason, trapaddr, addr)
 	}
-	cpu.interrupt(cpu.pc)
-	cpu.count++
 
 	cpu.uart.step(cpu.count)
+	cpu.plic.step(cpu.count, cpu.uart.interrupting, &cpu.csr[MIP])
+	cpu.count++
+
+	cpu.interrupt(cpu.pc)
 }
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
@@ -916,7 +929,7 @@ func (cpu *CPU) readraw(addr uint64) uint8 {
 		panic(fmt.Sprintf("nyi - read clint %x", addr))
 	}
 	if addr >= 0x0C000000 && addr <= 0x0fffffff {
-		panic(fmt.Sprintf("nyi - read plic %x", addr))
+		return cpu.plic.readuint8(addr)
 	}
 	if addr >= 0x10000000 && addr <= 0x100000ff {
 		return cpu.uart.readuint8(addr)
@@ -940,7 +953,8 @@ func (cpu *CPU) writeraw(addr uint64, v byte) {
 		panic(fmt.Sprintf("nyi - write clint %x: %x", addr, v))
 	}
 	if addr >= 0x0C000000 && addr <= 0x0fffffff {
-		panic(fmt.Sprintf("nyi - write plic %x: %x", addr, v))
+		cpu.plic.writeuint8(addr, v)
+		return
 	}
 	if addr >= 0x10000000 && addr <= 0x100000ff {
 		cpu.uart.writeuint8(addr, v)
@@ -1272,6 +1286,71 @@ const (
 	LSR_DATA_AVAILABLE uint8 = 0x1
 	LSR_THR_EMPTY      uint8 = 0x20
 )
+
+const (
+	UART_IRQ uint32 = 10
+)
+
+type Plic struct {
+	irq        uint32
+	enabled    uint64
+	threshold  uint32
+	ips        [1024]uint8
+	priorities [1024]uint32
+	updateIRQ  bool
+}
+
+func NewPlic() Plic {
+	return Plic{}
+}
+
+func (plic *Plic) step(clock uint64, uartip bool, mip *uint64) {
+	// TODO: Only handling UART so far
+	if uartip { // Uart is interrupting
+		index := 10 >> 3
+		plic.ips[index] |= 1 << (10 & 7)
+		plic.updateIRQ = true
+	}
+	if plic.updateIRQ {
+		uartip := (plic.ips[10>>3]>>(10&7))&1 == 1
+		uartpri := plic.priorities[10]
+		uartenabled := (plic.enabled>>10)&1 == 1
+
+		irq := uint32(0)
+		if uartip && uartenabled && uartpri > plic.threshold {
+			irq = 10
+		}
+
+		plic.irq = irq
+		if plic.irq != 0 {
+			*mip |= MIP_SEIP
+		}
+
+		plic.updateIRQ = false
+	}
+}
+
+func (plic *Plic) readuint8(addr uint64) (v uint8) {
+	defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
+	panic("nyi - read from plic")
+}
+
+func (plic *Plic) writeuint8(addr uint64, v uint8) {
+	fmt.Printf("plic[%x] <= %x\n", addr, v)
+	if addr >= 0x0c000000 && addr <= 0x0c000fff {
+		offset := addr & 0b11
+		index := (addr - 0xc000000) >> 2
+		pos := offset << 3
+		plic.priorities[index] = plic.priorities[index]&^(0xff<<pos) | uint32(v)<<pos
+		plic.updateIRQ = true
+	} else if addr >= 0x0c002081 && addr <= 0x0c002087 {
+		panic("nyi - write to plic enabled")
+	} else if addr >= 0x0c201000 && addr <= 0x0c201003 {
+		panic("nyi - write to plic threshold")
+	} else if addr == 0x0c201004 {
+		panic("nyi - write to plic claim")
+	}
+}
 
 type Uart struct {
 	rbr          uint8
