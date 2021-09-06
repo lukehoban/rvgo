@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,6 +39,12 @@ func TestRiscvTests(t *testing.T) {
 }
 
 func TestFirmware(t *testing.T) {
+	var err error
+	debugFile, err = os.Create("trace.txt")
+	assert.NoError(t, err)
+	defer debugFile.Close()
+	DEBUG = true
+
 	mem := make([]byte, 0x100000000)
 	entry, err := loadElf(filepath.Join("linux", "fw_payload.elf"), mem)
 	assert.NoError(t, err)

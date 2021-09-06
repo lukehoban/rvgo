@@ -9,7 +9,8 @@ import (
 	"strings"
 )
 
-const DEBUG = false
+var DEBUG = false
+var debugFile *os.File
 
 const (
 	MVENDORID = 0xF11
@@ -86,6 +87,9 @@ type CPU struct {
 	priv Privilege
 	wfi  bool
 
+	reservation    uint64
+	reservationSet bool
+
 	uart  Uart
 	plic  Plic
 	clint Clint
@@ -146,7 +150,7 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 		for _, r := range cpu.x {
 			regs = append(regs, fmt.Sprintf("%x", uint64(r)))
 		}
-		fmt.Printf("%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
+		fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
 	}
 
 	if instr&0b11 == 0b11 {
@@ -835,10 +839,24 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	case 0b0101111:
 		op := parseR(instr)
 		switch op.funct7 >> 2 {
-		case 0b00010:
-			panic("nyi - LR.W")
-		case 0b00011:
-			panic("nyi - SC.W")
+		case 0b00010: // LR.W
+			op := parseR(instr)
+			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.reservationSet = true
+			cpu.reservation = uint64(cpu.x[op.rs1])
+			cpu.x[op.rd] = int64(int32(v))
+		case 0b00011: // SC.W
+			op := parseR(instr)
+			if cpu.reservationSet && cpu.reservation == uint64(cpu.x[op.rs1]) {
+				cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
+				cpu.reservationSet = false
+				cpu.x[op.rd] = 0
+			} else {
+				cpu.x[op.rd] = 1
+			}
 		case 0b00001: // AMOSWAP.W
 			op := parseR(instr)
 			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
@@ -1177,9 +1195,9 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			} else if r != 0 {
 				nzimm := (instr<<5)&0x20000 | (instr<<10)&0x1f000
 				if instr&0x1000 != 0 {
-					nzimm |= 0xfffc0
+					nzimm |= 0xfffc0000
 				}
-				if nzimm != 0 {
+				if nzimm != 0 { // C.LUI = lui r, nzimm
 					return nzimm | r | 0x37
 				} else {
 					panic("nyi - reserved")
