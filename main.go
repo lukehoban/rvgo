@@ -85,19 +85,22 @@ type CPU struct {
 	csr  [4096]uint64
 	priv Privilege
 	wfi  bool
-	uart Uart
-	plic Plic
+
+	uart  Uart
+	plic  Plic
+	clint Clint
 
 	count uint64
 }
 
 func NewCPU(mem []byte, pc uint64) CPU {
 	cpu := CPU{
-		pc:   pc,
-		mem:  mem,
-		priv: Machine,
-		uart: NewUart(),
-		plic: NewPlic(),
+		pc:    pc,
+		mem:   mem,
+		priv:  Machine,
+		uart:  NewUart(),
+		plic:  NewPlic(),
+		clint: NewClint(),
 	}
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
@@ -118,6 +121,7 @@ func (cpu *CPU) step() {
 		cpu.exception(reason, trapaddr, addr)
 	}
 
+	cpu.clint.step(cpu.count, &cpu.csr[MIP])
 	cpu.uart.step(cpu.count)
 	cpu.plic.step(cpu.count, cpu.uart.interrupting, &cpu.csr[MIP])
 	cpu.count++
@@ -201,7 +205,25 @@ func (cpu *CPU) exception(reason TrapReason, trapaddr uint64, instructionaddr ui
 }
 
 func (cpu *CPU) interrupt(pc uint64) {
-	// TODO: handle interrupts
+	minterrupt := cpu.csr[MIP] & cpu.csr[MIE]
+	if minterrupt&MIP_MEIP != 0 {
+		panic("nyi - handle MachineExternalInterrupt")
+	}
+	if minterrupt&MIP_MSIP != 0 {
+		panic("nyi - handle MachineSoftwareInterrupt")
+	}
+	if minterrupt&MIP_MTIP != 0 {
+		panic("nyi - handle MachineTimerInterrupt")
+	}
+	if minterrupt&MIP_SEIP != 0 {
+		panic("nyi - handle SupervisorExternalInterrupt")
+	}
+	if minterrupt&MIP_MSIP != 0 {
+		panic("nyi - handle SupervisorSoftwareInterrupt")
+	}
+	if minterrupt&MIP_MTIP != 0 {
+		panic("nyi - handle SupervisorTimerInterrupt")
+	}
 }
 
 func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool) bool {
@@ -606,7 +628,14 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0100000: // SRA
 				cpu.x[op.rd] = cpu.x[op.rs1] >> (cpu.x[op.rs2] & 0b111111)
 			case 1: // DIVU
-				panic("nyi - DIVU")
+				op := parseR(instr)
+				a1 := uint64(cpu.x[op.rs1])
+				a2 := uint64(cpu.x[op.rs2])
+				if a2 == 0 {
+					cpu.x[op.rd] = -1
+				} else {
+					cpu.x[op.rd] = int64(a1 / a2)
+				}
 			default:
 				panic("invalid insruction")
 			}
@@ -615,7 +644,16 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0: // OR
 				cpu.x[op.rd] = cpu.x[op.rs1] | cpu.x[op.rs2]
 			case 1: // REM
-				panic("nyi - REM")
+				op := parseR(instr)
+				a1 := cpu.x[op.rs1]
+				a2 := cpu.x[op.rs2]
+				if a2 == 0 {
+					cpu.x[op.rd] = a1
+				} else if a1 == math.MinInt64 && a2 == -1 {
+					cpu.x[op.rd] = 0
+				} else {
+					cpu.x[op.rd] = a1 % a2
+				}
 			default:
 				panic("invalid insruction")
 			}
@@ -624,7 +662,14 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0: // AND
 				cpu.x[op.rd] = cpu.x[op.rs1] & cpu.x[op.rs2]
 			case 1: // REMU
-				panic("nyi - REMU")
+				op := parseR(instr)
+				a1 := uint64(cpu.x[op.rs1])
+				a2 := uint64(cpu.x[op.rs2])
+				if a2 == 0 {
+					cpu.x[op.rd] = int64(a1)
+				} else {
+					cpu.x[op.rd] = int64(a1 % a2)
+				}
 			default:
 				panic("invalid insruction")
 			}
@@ -689,15 +734,22 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.csr[op.csr] |= uint64(cpu.x[op.rs])
 			cpu.x[op.rd] = int64(t)
 		case 0b011: // CSRRC
-			panic("nyi - CSRRC")
+			t := cpu.csr[op.csr]
+			trs := cpu.x[op.rs]
+			cpu.x[op.rd] = int64(t)
+			cpu.csr[op.csr] = uint64(cpu.x[op.rd] & ^trs)
 		case 0b101: // CSRRWI
 			t := cpu.csr[op.csr]
-			cpu.csr[op.csr] = uint64(op.rs)
 			cpu.x[op.rd] = int64(t)
-		case 0b110:
-			panic("nyi - CSRRSI")
-		case 0b111:
-			panic("nyi - CSRRCI")
+			cpu.csr[op.csr] = uint64(op.rs)
+		case 0b110: // CSRRSI
+			t := cpu.csr[op.csr]
+			cpu.x[op.rd] = int64(t)
+			cpu.csr[op.csr] = uint64(cpu.x[op.rd] | int64(op.rs))
+		case 0b111: // CSRRCI
+			t := cpu.csr[op.csr]
+			cpu.x[op.rd] = int64(t)
+			cpu.csr[op.csr] = uint64(cpu.x[op.rd] & ^int64(op.rs))
 		default:
 			panic("invalid insruction")
 		}
@@ -766,7 +818,14 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b111:
 			switch op.funct7 {
 			case 1: // REMUW
-				panic("nyi - REMUW")
+				op := parseR(instr)
+				a1 := uint32(cpu.x[op.rs1])
+				a2 := uint32(cpu.x[op.rs2])
+				if a2 == 0 {
+					cpu.x[op.rd] = int64(int32(a1))
+				} else {
+					cpu.x[op.rd] = int64(int32(a1 % a2))
+				}
 			default:
 				panic("invalid insruction")
 			}
@@ -926,7 +985,7 @@ func (cpu *CPU) readraw(addr uint64) uint8 {
 		return dtb[addr-0x00001020]
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
-		panic(fmt.Sprintf("nyi - read clint %x", addr))
+		return cpu.clint.readuint8(addr)
 	}
 	if addr >= 0x0C000000 && addr <= 0x0fffffff {
 		return cpu.plic.readuint8(addr)
@@ -950,7 +1009,8 @@ func (cpu *CPU) writeraw(addr uint64, v byte) {
 		panic("nyi - cannot write to dtb")
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
-		panic(fmt.Sprintf("nyi - write clint %x: %x", addr, v))
+		cpu.clint.writeuint8(addr, v)
+		return
 	}
 	if addr >= 0x0C000000 && addr <= 0x0fffffff {
 		cpu.plic.writeuint8(addr, v)
@@ -1508,6 +1568,44 @@ func loadElf(file string, mem []byte) (uint64, error) {
 		}
 	}
 	return f.Entry, nil
+}
+
+type Clint struct {
+	msip     uint32
+	mtimecmp uint64
+	mtime    uint64
+}
+
+func NewClint() Clint {
+	return Clint{}
+}
+
+func (clint *Clint) step(clock uint64, mip *uint64) {
+	clint.mtime++
+	if clint.msip&1 != 0 {
+		*mip = MIP_MSIP
+	}
+	if clint.mtimecmp > 0 && clint.mtime >= clint.mtimecmp {
+		*mip = MIP_MTIP
+	}
+}
+
+func (clint *Clint) readuint8(addr uint64) (v uint8) {
+	defer func() { fmt.Printf("clint[%x] => %x\n", addr, v) }()
+	fmt.Printf("warning: ignored cint[%x] =>\n", addr)
+	panic("nyi - read from clint")
+}
+
+func (clint *Clint) writeuint8(addr uint64, v uint8) {
+	fmt.Printf("clint[%x] <= %x\n", addr, v)
+	switch addr {
+	case 0x02000000:
+		clint.msip = clint.msip&^0x1 | uint32(v)&1
+	case 0x02000001, 0x02000002, 0x02000003:
+		// Hardwired to zero
+	default:
+		fmt.Printf("warning: ignored clint[%x] <= %v\n", addr, v)
+	}
 }
 
 func do() error {
