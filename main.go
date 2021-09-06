@@ -1296,7 +1296,7 @@ const (
 
 type Plic struct {
 	irq        uint32
-	enabled    uint64
+	enabled    uint64 // TODO: Contexts other than 1?
 	threshold  uint32
 	ips        [1024]uint8
 	priorities [1024]uint32
@@ -1335,6 +1335,7 @@ func (plic *Plic) step(clock uint64, uartip bool, mip *uint64) {
 
 func (plic *Plic) readuint8(addr uint64) (v uint8) {
 	defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
+	fmt.Printf("warning: ignored plic[%x] =>\n", addr)
 	panic("nyi - read from plic")
 }
 
@@ -1346,12 +1347,22 @@ func (plic *Plic) writeuint8(addr uint64, v uint8) {
 		pos := offset << 3
 		plic.priorities[index] = plic.priorities[index]&^(0xff<<pos) | uint32(v)<<pos
 		plic.updateIRQ = true
-	} else if addr >= 0x0c002081 && addr <= 0x0c002087 {
-		panic("nyi - write to plic enabled")
+	} else if addr >= 0x0c002080 && addr <= 0x0c002087 {
+		pos := 8 * (addr & 0x11)
+		plic.enabled = plic.enabled & ^(0xff<<pos) | uint64(v)<<pos
+		if pos == 0 {
+			plic.updateIRQ = true
+		}
 	} else if addr >= 0x0c201000 && addr <= 0x0c201003 {
-		panic("nyi - write to plic threshold")
+		pos := 8 * (addr & 0x11)
+		plic.threshold = plic.threshold & ^(0xff<<pos) | uint32(v)<<pos
+		if pos == 0 {
+			plic.updateIRQ = true
+		}
 	} else if addr == 0x0c201004 {
 		panic("nyi - write to plic claim")
+	} else {
+		fmt.Printf("warning: ignored plic[%x] <= %x\n", addr, v)
 	}
 }
 
