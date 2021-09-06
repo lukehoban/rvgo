@@ -680,8 +680,8 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		default:
 			panic("invalid insruction")
 		}
-	case 0b0001111:
-		// Do nothing?
+	case 0b0001111: // FENCE/FENCE.I
+		// TODO: Is it okay to do nothing?
 	case 0b1110011:
 		op := parseCSR(instr)
 		switch op.funct3 {
@@ -719,8 +719,8 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				cpu.wfi = true
 			default:
 				switch op.csr >> 5 {
-				case 0b0001001:
-					panic("nyi - SFENCE.VMA")
+				case 0b0001001: // SFENCE.VMA
+					// TODO: Is it okat to do nothing?
 				case 0b0010001:
 					panic("nyi - HFENCE.BVMA")
 				case 0b1010001:
