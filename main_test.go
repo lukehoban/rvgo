@@ -43,5 +43,9 @@ func TestFirmware(t *testing.T) {
 	cpu := NewCPU(mem, entry)
 	for {
 		cpu.step()
+		if cpu.wfi {
+			// TODO: Support interrupts needed to make more progress
+			return
+		}
 	}
 }

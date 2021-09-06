@@ -2,6 +2,7 @@ package main
 
 import (
 	"debug/elf"
+	_ "embed"
 	"fmt"
 )
 
@@ -58,6 +59,9 @@ const (
 	Hypervisor Privilege = 2
 	Machine    Privilege = 3
 )
+
+//go:embed dtb/dtb.dtb
+var dtb []byte
 
 type CPU struct {
 	pc   uint64
@@ -756,7 +760,7 @@ func (cpu *CPU) readraw(addr uint64) uint8 {
 		return cpu.mem[addr]
 	}
 	if addr >= 0x00001020 && addr <= 0x00001fff {
-		panic("nyi - dtb")
+		return dtb[addr-0x00001020]
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
 		panic("nyi - clint")
@@ -780,7 +784,7 @@ func (cpu *CPU) writeraw(addr uint64, v byte) {
 		return
 	}
 	if addr >= 0x00001020 && addr <= 0x00001fff {
-		panic("nyi - dtb")
+		panic("nyi - cannot write to dtb")
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
 		panic("nyi - clint")
