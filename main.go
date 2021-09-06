@@ -4,6 +4,7 @@ import (
 	"debug/elf"
 	_ "embed"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -113,7 +114,13 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	}
 
 	addr := cpu.pc
-	fmt.Printf("%08d -- [%08x]: %08x %x\n", cpu.count, cpu.pc, instr, cpu.x)
+
+	var regs []string
+	for _, r := range cpu.x {
+		regs = append(regs, fmt.Sprintf("%x", uint64(r)))
+	}
+	fmt.Printf("%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
+
 	if instr&0b11 == 0b11 {
 		cpu.pc += 4
 	} else {
@@ -864,7 +871,6 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 		case 0b000:
 			rd := (instr >> 2) & 0x7
 			nzuimm := (instr>>7)&0x30 | (instr>>1)&0x3c0 | (instr>>4)&0x4 | (instr>>2)&0x8
-
 			if nzuimm != 0 { // C.ADDI4SPN = addi rd+8, x2, nzuimm
 				return nzuimm<<20 | 2<<15 | (rd+8)<<7 | 0x13
 			} else {
@@ -1010,8 +1016,15 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			imm2 := (offset>>6)&0x40 | (offset>>5)&0x3f
 			imm1 := (offset>>0)&0x1e | (offset>>11)&0x1
 			return imm2<<25 | (r+8)<<20 | imm1<<7 | 0x63
-		case 0b111:
-			panic("nyi - C.BNEZ")
+		case 0b111: // C.BNEZ = bne r+8, x0, offset
+			r := (instr >> 7) & 0x7
+			offset := (instr>>4)&0x100 | (instr>>7)&0x18 | (instr<<1)&0xc0 | (instr>>2)&0x6 | (instr<<3)&0x20
+			if instr&0x1000 != 0 {
+				offset |= 0xfffffe00
+			}
+			imm2 := (offset>>6)&0x40 | (offset>>5)&0x3f
+			imm1 := (offset>>0)&0x1e | (offset>>11)&0x1
+			return imm2<<25 | (r+8)<<20 | 1<<12 | imm1<<7 | 0x63
 		default:
 			panic("unreachable")
 		}
@@ -1084,16 +1097,15 @@ func loadElf(file string, mem []byte) (uint64, error) {
 	}
 	defer f.Close()
 	for _, prog := range f.Progs {
-		if prog.Memsz == 0 {
-			fmt.Printf("warning: empty program section?\n")
-			continue
-		}
-		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Memsz], 0)
+		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Filesz], 0)
 		if err != nil {
 			return 0, err
 		}
-		if n != int(prog.Memsz) {
+		if n != int(prog.Filesz) {
 			return 0, fmt.Errorf("didn't read full section")
+		}
+		for i := prog.Filesz; i < prog.Memsz; i++ {
+			mem[prog.Paddr+i] = 0
 		}
 	}
 	return f.Entry, nil
