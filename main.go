@@ -1394,13 +1394,13 @@ func (plic *Plic) step(clock uint64, uartip bool, mip *uint64) {
 }
 
 func (plic *Plic) readuint8(addr uint64) (v uint8) {
-	defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
-	fmt.Printf("warning: ignored plic[%x] =>\n", addr)
+	// defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
+	// fmt.Printf("warning: ignored plic[%x] =>\n", addr)
 	panic("nyi - read from plic")
 }
 
 func (plic *Plic) writeuint8(addr uint64, v uint8) {
-	fmt.Printf("plic[%x] <= %x\n", addr, v)
+	// fmt.Printf("plic[%x] <= %x\n", addr, v)
 	if addr >= 0x0c000000 && addr <= 0x0c000fff {
 		offset := addr & 0b11
 		index := (addr - 0xc000000) >> 2
@@ -1422,7 +1422,7 @@ func (plic *Plic) writeuint8(addr uint64, v uint8) {
 	} else if addr == 0x0c201004 {
 		panic("nyi - write to plic claim")
 	} else {
-		fmt.Printf("warning: ignored plic[%x] <= %x\n", addr, v)
+		// fmt.Printf("warning: ignored plic[%x] <= %x\n", addr, v)
 	}
 }
 
@@ -1484,7 +1484,7 @@ func (uart *Uart) updateIIR() {
 }
 
 func (uart *Uart) readuint8(addr uint64) (v uint8) {
-	defer func() { fmt.Printf("uart[%x] => %x\n", addr, v) }()
+	// defer func() { fmt.Printf("uart[%x] => %x\n", addr, v) }()
 	switch addr {
 	case 0x10000000:
 		if (uart.lcr >> 7) == 0 {
@@ -1518,7 +1518,7 @@ func (uart *Uart) readuint8(addr uint64) (v uint8) {
 }
 
 func (uart *Uart) writeuint8(addr uint64, v uint8) {
-	fmt.Printf("uart[%x] <= %x\n", addr, v)
+	// fmt.Printf("uart[%x] <= %x\n", addr, v)
 	switch addr {
 	case 0x10000000:
 		if (uart.lcr >> 7) == 0 {
@@ -1591,20 +1591,20 @@ func (clint *Clint) step(clock uint64, mip *uint64) {
 }
 
 func (clint *Clint) readuint8(addr uint64) (v uint8) {
-	defer func() { fmt.Printf("clint[%x] => %x\n", addr, v) }()
-	fmt.Printf("warning: ignored cint[%x] =>\n", addr)
+	// defer func() { fmt.Printf("clint[%x] => %x\n", addr, v) }()
+	// fmt.Printf("warning: ignored cint[%x] =>\n", addr)
 	panic("nyi - read from clint")
 }
 
 func (clint *Clint) writeuint8(addr uint64, v uint8) {
-	fmt.Printf("clint[%x] <= %x\n", addr, v)
+	// fmt.Printf("clint[%x] <= %x\n", addr, v)
 	switch addr {
 	case 0x02000000:
 		clint.msip = clint.msip&^0x1 | uint32(v)&1
 	case 0x02000001, 0x02000002, 0x02000003:
 		// Hardwired to zero
 	default:
-		fmt.Printf("warning: ignored clint[%x] <= %v\n", addr, v)
+		// fmt.Printf("warning: ignored clint[%x] <= %v\n", addr, v)
 	}
 }
 
