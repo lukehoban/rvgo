@@ -1134,8 +1134,11 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 				rs1 := (instr >> 7) & 0x7
 				shamt := (instr>>7)&0x20 | (instr>>2)&0x1f
 				return shamt<<20 | (rs1+8)<<15 | 5<<12 | (rs1+8)<<7 | 0x13
-			case 0b01:
-				panic("nyi - C.SRAI")
+			case 0b01: // C.SRAI = srai rs1+8, rs1+8, shamt
+				rs1 := (instr >> 7) & 0x7
+				shamt := (instr>>7)&0x20 | (instr>>2)&0x1f
+				return 0x20<<25 | shamt<<20 | (rs1+8)<<15 | 5<<12 | (rs1+8)<<7 | 0x13
+
 			case 0b10: // C.ANDI = andi, r+8, r+8, imm
 				r := (instr >> 7) & 0x7
 				imm := (instr>>7)&0x20 | (instr>>2)&0x1f
