@@ -65,16 +65,21 @@ type CPU struct {
 	x    [32]int64
 	csr  [4096]uint64
 	priv Privilege
+	wfi  bool
 
 	count uint64
 }
 
 func NewCPU(mem []byte, pc uint64) CPU {
-	return CPU{
+	cpu := CPU{
 		pc:   pc,
 		mem:  mem,
 		priv: Machine,
 	}
+	// TODO: Why?
+	cpu.x[0xb] = 0x1020
+	cpu.csr[MISA] = 0x800000008014312f
+	return cpu
 }
 
 func (cpu *CPU) run() {
@@ -94,6 +99,10 @@ func (cpu *CPU) step() {
 }
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
+	if cpu.wfi {
+		// TODO: Support interrupts
+		return true, 0, 0
+	}
 	instr, ok, reason := cpu.fetch()
 	if !ok {
 		return false, reason, cpu.pc
@@ -355,12 +364,13 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		op := parseJ(instr)
 		cpu.x[op.rd] = int64(cpu.pc)
 		cpu.pc = addr + uint64(int64(op.imm))
-	case 0b1100111:
+	case 0b1100111: // JALR
 		op := parseI(instr)
 		rd := op.rd
-		if rd == 0 {
-			rd = 1
-		}
+		// TODO: Check on this?
+		// if rd == 0 {
+		// 	rd = 1
+		// }
 		t := int64(cpu.pc)
 		cpu.pc = (uint64(cpu.x[op.rs1]+int64(op.imm)) >> 1) << 1
 		cpu.x[rd] = t
@@ -392,7 +402,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 	case 0b0000011:
 		op := parseI(instr)
@@ -440,7 +450,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			}
 			cpu.x[op.rd] = int64(uint64(data))
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 	case 0b0100011:
 		op := parseS(instr)
@@ -454,7 +464,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b011: // SD
 			cpu.writeuint64(uint64(cpu.x[op.rs1]+int64(op.imm)), uint64(cpu.x[op.rs2]))
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 	case 0b0010011:
 		op := parseI(instr)
@@ -481,7 +491,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.x[op.rd] = cpu.x[op.rs1] & int64(op.imm)
 		case 0b001: // SLLI
 			if op.imm>>6 != 0 {
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 			cpu.x[op.rd] = cpu.x[op.rs1] << op.imm
 		case 0b101:
@@ -491,10 +501,10 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b010000: // SRAI
 				cpu.x[op.rd] = cpu.x[op.rs1] >> (op.imm & 0b111111)
 			default:
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 	case 0b0110011:
 		op := parseR(instr)
@@ -506,7 +516,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0100000: // SUB
 				cpu.x[op.rd] = cpu.x[op.rs1] - cpu.x[op.rs2]
 			default:
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 		case 0b001: // SLL
 			cpu.x[op.rd] = cpu.x[op.rs1] << (cpu.x[op.rs2] & 0b111111)
@@ -531,14 +541,14 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0100000: // SRA
 				cpu.x[op.rd] = cpu.x[op.rs1] >> (cpu.x[op.rs2] & 0b111111)
 			default:
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 		case 0b110:
 			cpu.x[op.rd] = cpu.x[op.rs1] | cpu.x[op.rs2]
 		case 0b111:
 			cpu.x[op.rd] = cpu.x[op.rs1] & cpu.x[op.rs2]
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 
 	case 0b0001111:
@@ -548,7 +558,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		switch op.funct3 {
 		case 0b000:
 			if op.funct3 != 0 || op.rd != 0 || op.rs != 0 {
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 			switch op.csr {
 			case 0: // ECALL
@@ -566,14 +576,29 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				}
 			case 1:
 				panic("nyi - EBREAK")
-			case 0b001100000010:
+			case 0b000000000010: // URET
+				panic("nyi - URET")
+			case 0b000100000010: // SRET
+				panic("nyi - SRET")
+			case 0b001100000010: // MRET
 				cpu.pc = cpu.csr[MEPC]
 				cpu.priv = cpu.getMPP()
 				cpu.setMIE(cpu.getMPIE())
 				cpu.setMPIE(1)
 				cpu.setMPP(0)
+			case 0b000100000101: // WFI
+				cpu.wfi = true
 			default:
-				return false, IllegalInstruction, addr
+				switch op.csr >> 5 {
+				case 0b0001001:
+					panic("nyi - SFENCE.VMA")
+				case 0b0010001:
+					panic("nyi - HFENCE.BVMA")
+				case 0b1010001:
+					panic("nyi - HFENCE.GVMA")
+				default:
+					panic("nyi - invalid instruction")
+				}
 			}
 		case 0b001: // CSRRW
 			t := cpu.csr[op.csr]
@@ -594,7 +619,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b111:
 			panic("nyi - CSRRCI")
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 	case 0b0111011:
 		op := parseR(instr)
@@ -606,7 +631,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0100000: // SUB
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) - int32(cpu.x[op.rs2]))
 			default:
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 		case 0b001:
 			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) << (cpu.x[op.rs2] & 0b11111))
@@ -617,11 +642,11 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0100000: // SRA
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (cpu.x[op.rs2] & 0b11111))
 			default:
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 		default:
 			panic("nyi - 0111011")
-			// return false, IllegalInstruction, addr
+			// panic("invalid insruction")
 		}
 	case 0b0101111:
 		op := parseR(instr)
@@ -680,7 +705,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] + int64(op.imm)))
 		case 0b001: // SLLIW
 			if op.imm>>5 != 0 {
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] << op.imm))
 		case 0b101:
@@ -690,10 +715,10 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b010000: // SRAIW
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (op.imm & 0b111111))
 			default:
-				return false, IllegalInstruction, addr
+				panic("invalid insruction")
 			}
 		default:
-			return false, IllegalInstruction, addr
+			panic("invalid insruction")
 		}
 	default:
 		panic(fmt.Sprintf("nyi - opcode %x", instr&0x7f))
@@ -725,10 +750,57 @@ func (cpu *CPU) setMPIE(v uint64) {
 	cpu.csr[MSTATUS] |= (v & 0b1) << 7
 }
 
+func (cpu *CPU) readraw(addr uint64) uint8 {
+	if addr >= 0x80000000 {
+		// TODO: allow the ram to be smaller (-0x80000000)
+		return cpu.mem[addr]
+	}
+	if addr >= 0x00001020 && addr <= 0x00001fff {
+		panic("nyi - dtb")
+	}
+	if addr >= 0x02000000 && addr <= 0x0200ffff {
+		panic("nyi - clint")
+	}
+	if addr >= 0x0C000000 && addr <= 0x0fffffff {
+		panic("nyi - plic")
+	}
+	if addr >= 0x10000000 && addr <= 0x100000ff {
+		panic("nyi - uart")
+	}
+	if addr >= 0x10001000 && addr <= 0x10001FFF {
+		panic("nyi - disk")
+	}
+	panic(fmt.Sprintf("nyi - unsupported address %x", addr))
+}
+
+func (cpu *CPU) writeraw(addr uint64, v byte) {
+	if addr >= 0x80000000 {
+		// TODO: allow the ram to be smaller (-0x80000000)
+		cpu.mem[addr] = v
+		return
+	}
+	if addr >= 0x00001020 && addr <= 0x00001fff {
+		panic("nyi - dtb")
+	}
+	if addr >= 0x02000000 && addr <= 0x0200ffff {
+		panic("nyi - clint")
+	}
+	if addr >= 0x0C000000 && addr <= 0x0fffffff {
+		panic("nyi - plic")
+	}
+	if addr >= 0x10000000 && addr <= 0x100000ff {
+		panic("nyi - uart")
+	}
+	if addr >= 0x10001000 && addr <= 0x10001FFF {
+		panic("nyi - disk")
+	}
+	panic(fmt.Sprintf("nyi - unsupported address %x", addr))
+}
+
 func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
 	val := uint64(0)
 	for i := uint64(0); i < 8; i++ {
-		val |= (uint64(cpu.mem[addr+i]) << (i * 8))
+		val |= (uint64(cpu.readraw(addr+i)) << (i * 8))
 	}
 	return val, true, 0
 }
@@ -736,7 +808,7 @@ func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
 func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
 	val := uint32(0)
 	for i := uint64(0); i < 4; i++ {
-		val |= (uint32(cpu.mem[addr+i]) << (i * 8))
+		val |= (uint32(cpu.readraw(addr+i)) << (i * 8))
 	}
 	return val, true, 0
 }
@@ -744,38 +816,38 @@ func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
 func (cpu *CPU) readuint16(addr uint64) (uint16, bool, TrapReason) {
 	val := uint16(0)
 	for i := uint64(0); i < 2; i++ {
-		val |= (uint16(cpu.mem[addr+i]) << (i * 8))
+		val |= (uint16(cpu.readraw(addr+i)) << (i * 8))
 	}
 	return val, true, 0
 }
 
 func (cpu *CPU) readuint8(addr uint64) (uint8, bool, TrapReason) {
-	return uint8(cpu.mem[addr]), true, 0
+	return cpu.readraw(addr), true, 0
 }
 
 func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, TrapReason) {
 	for i := uint64(0); i < 8; i++ {
-		cpu.mem[addr+i] = byte(val >> (i * 8))
+		cpu.writeraw(addr+i, byte(val>>(i*8)))
 	}
 	return true, 0
 }
 
 func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, TrapReason) {
 	for i := uint64(0); i < 4; i++ {
-		cpu.mem[addr+i] = byte(val >> (i * 8))
+		cpu.writeraw(addr+i, byte(val>>(i*8)))
 	}
 	return true, 0
 }
 
 func (cpu *CPU) writeuint16(addr uint64, val uint16) (bool, TrapReason) {
 	for i := uint64(0); i < 2; i++ {
-		cpu.mem[addr+i] = byte(val >> (i * 8))
+		cpu.writeraw(addr+i, byte(val>>(i*8)))
 	}
 	return true, 0
 }
 
 func (cpu *CPU) writeuint8(addr uint64, val uint8) (bool, TrapReason) {
-	cpu.mem[addr] = byte(val)
+	cpu.writeraw(addr, byte(val))
 	return true, 0
 }
 
@@ -825,7 +897,16 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 				return imm<<20 | r<<8 | r | 0x13
 			}
 		case 0b001:
-			panic("nyi - C.JAL/C.ADDIW")
+			r := instr & 0b111110000000
+			imm := (instr>>7)&0x20 | (instr>>2)&0x1f
+			if instr&0x1000 != 0 {
+				imm |= 0xffffffc0
+			}
+			if r != 0 { // C.ADDIW = addiw r, r, imm
+				return imm<<20 | r<<8 | r | 0x1b
+			} else {
+				panic("reserved")
+			}
 		case 0b010: // C.LI = addi rd, x0, imm
 			r := instr & 0b111110000000
 			imm := (instr>>7)&0x20 | (instr>>2)&0x1f
@@ -909,11 +990,19 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			default:
 				panic("unreachable")
 			}
-		case 0b101:
-			panic("nyi - C.J")
+		case 0b101: // C.J = jal x0, imm
+			offset := (instr>>1)&0x800 | (instr>>7)&0x10 | (instr>>1)&0x300 | (instr<<2)&0x400 | (instr>>1)&0x40 | (instr<<1)&0x80 | (instr>>2)&0xe | (instr<<3)&0x20
+			if instr&0x1000 != 0 {
+				offset |= 0xfffff000
+			}
+			imm := (offset>>1)&0x80000 | (offset<<8)&0x7fe00 | (offset>>3)&0x100 | (offset>>12)&0xff
+			return imm<<12 | 0x6f
 		case 0b110: // C.BEQZ = beq r+8, x0, offset
 			r := (instr >> 7) & 0x7
 			offset := (instr>>4)&0x100 | (instr>>7)&0x18 | (instr<<1)&0xc0 | (instr>>2)&0x6 | (instr<<3)&0x20
+			if instr&0x1000 != 0 {
+				offset |= 0xfffffe00
+			}
 			imm2 := (offset>>6)&0x40 | (offset>>5)&0x3f
 			imm1 := (offset>>0)&0x1e | (offset>>11)&0x1
 			return imm2<<25 | (r+8)<<20 | imm1<<7 | 0x63
