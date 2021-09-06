@@ -4,6 +4,7 @@ import (
 	"debug/elf"
 	_ "embed"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -68,6 +69,7 @@ type CPU struct {
 	pc   uint64
 	mem  []byte
 	x    [32]int64
+	f    [32]float64
 	csr  [4096]uint64
 	priv Privilege
 	wfi  bool
@@ -686,23 +688,68 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) + int32(cpu.x[op.rs2]))
 			case 0b0100000: // SUB
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) - int32(cpu.x[op.rs2]))
+			case 1: // MULW
+				panic("nyi - MULW")
 			default:
 				panic("invalid insruction")
 			}
 		case 0b001:
-			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) << (cpu.x[op.rs2] & 0b11111))
+			switch op.funct7 {
+			case 0:
+				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) << (cpu.x[op.rs2] & 0b11111))
+			default:
+				panic("invalid insruction")
+			}
+		case 0b100:
+			switch op.funct7 {
+			case 1: // DIVW
+				op := parseR(instr)
+				a1 := int32(cpu.x[op.rs1])
+				a2 := int32(cpu.x[op.rs2])
+				if a2 == 0 {
+					cpu.x[op.rd] = -1
+				} else if a1 == math.MinInt32 && a2 == -1 {
+					cpu.x[op.rd] = int64(a1)
+				} else {
+					cpu.x[op.rd] = int64(int32(a1 / a2))
+				}
+			default:
+				panic("invalid insruction")
+			}
 		case 0b101:
 			switch op.funct7 {
 			case 0: // SRL
 				cpu.x[op.rd] = int64(int32(uint32(uint64(cpu.x[op.rs1])) >> (cpu.x[op.rs2] & 0b11111)))
 			case 0b0100000: // SRA
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (cpu.x[op.rs2] & 0b11111))
+			case 1: // DIVUW
+				op := parseR(instr)
+				a1 := uint32(cpu.x[op.rs1])
+				a2 := uint32(cpu.x[op.rs2])
+				if a2 == 0 {
+					cpu.x[op.rd] = -1
+				} else {
+					cpu.x[op.rd] = int64(int32(a1 / a2))
+				}
+			default:
+				panic("invalid insruction")
+			}
+		case 0b110:
+			switch op.funct7 {
+			case 1: // REMW
+				panic("nyi - REMW")
+			default:
+				panic("invalid insruction")
+			}
+		case 0b111:
+			switch op.funct7 {
+			case 1: // REMUW
+				panic("nyi - REMUW")
 			default:
 				panic("invalid insruction")
 			}
 		default:
 			panic("nyi - 0111011")
-			// panic("invalid insruction")
 		}
 	case 0b0101111:
 		op := parseR(instr)
@@ -711,9 +758,18 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			panic("nyi - LR.W")
 		case 0b00011:
 			panic("nyi - SC.W")
-		case 0b00001:
-			panic("nyi - AMOSWAP.W")
-		case 0b00000:
+		case 0b00001: // AMOSWAP.W
+			op := parseR(instr)
+			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+			if !ok {
+				return false, reason, addr
+			}
+			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.x[op.rd] = int64(int32(v))
+		case 0b00000: // AMOADD.W
 			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
 			if !ok {
 				return false, reason, addr
@@ -753,7 +809,36 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	case 0b1001111:
 		panic("nyi - FNMADD.S")
 	case 0b1010011:
-		panic("nyi - F extension")
+		op := parseR(instr)
+		switch op.funct7 {
+		case 0b0000000:
+			panic("nyi - FADD.S")
+		case 0b0000100:
+			panic("nyi - FSUB.S")
+		case 0b0001000:
+			panic("nyi - FMUL.S")
+		case 0b0001100:
+			panic("nyi - FDIV.S")
+		case 0b0101100:
+			panic("nyi - FSQRT.S")
+		case 0b0010000:
+			panic("nyi - FSGN*.S")
+		case 0b0010100:
+			panic("nyi - FM**.S")
+		case 0b1100000:
+			panic("nyi - FCVT.W*.S")
+		case 0b1110000:
+			panic("nyi - FMV.X.W")
+		case 0b1010000:
+			panic("nyi - FEQ.S/*")
+		case 0b1101000:
+			panic("nyi - FCVT.S.W*")
+		case 0b1111000:
+			op := parseR(instr)
+			cpu.f[op.rd] = math.Float64frombits(uint64(uint32(cpu.x[op.rs1])))
+		default:
+			panic("invalid")
+		}
 	case 0b0011011:
 		op := parseI(instr)
 		switch op.funct3 {
@@ -948,8 +1033,13 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			imm115 := (offset >> 5) & 0x3f
 			imm40 := offset & 0x1f
 			return imm115<<25 | (rs2+8)<<20 | (rs1+8)<<15 | 2<<12 | imm40<<7 | 0x23
-		case 0b111:
-			panic("nyi - C.FSW/C.SD")
+		case 0b111: // C.SD = sd rs2+8, offset(rs1+8)
+			rs1 := (instr >> 7) & 0x7
+			rs2 := (instr >> 2) & 0x7
+			offset := (instr>>7)&0x38 | (instr<<1)&0xc0
+			imm115 := (offset >> 5) & 0x7f
+			imm40 := offset & 0x1f
+			return imm115<<25 | (rs2+8)<<20 | (rs1+8)<<15 | 3<<12 | imm40<<7 | 0x23
 		default:
 			panic("unreachable")
 		}
@@ -1022,8 +1112,13 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 				return shamt<<20 | (rs1+8)<<15 | 5<<12 | (rs1+8)<<7 | 0x13
 			case 0b01:
 				panic("nyi - C.SRAI")
-			case 0b10:
-				panic("nyi - C.ANDI")
+			case 0b10: // C.ANDI = andi, r+8, r+8, imm
+				r := (instr >> 7) & 0x7
+				imm := (instr>>7)&0x20 | (instr>>2)&0x1f
+				if instr&0x1000 != 0 {
+					imm |= 0xffffffc0
+				}
+				return imm<<20 | (r+8)<<15 | 7<<12 | (r+8)<<7 | 0x13
 			case 0b11:
 				funct1 := (instr >> 12) & 1
 				funct22 := (instr >> 5) & 0x3
