@@ -5,8 +5,11 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 )
+
+const DEBUG = true
 
 const (
 	MVENDORID = 0xF11
@@ -73,6 +76,7 @@ type CPU struct {
 	csr  [4096]uint64
 	priv Privilege
 	wfi  bool
+	uart Uart
 
 	count uint64
 }
@@ -82,6 +86,7 @@ func NewCPU(mem []byte, pc uint64) CPU {
 		pc:   pc,
 		mem:  mem,
 		priv: Machine,
+		uart: NewUart(),
 	}
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
@@ -103,6 +108,8 @@ func (cpu *CPU) step() {
 	}
 	cpu.interrupt(cpu.pc)
 	cpu.count++
+
+	cpu.uart.step(cpu.count)
 }
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
@@ -117,11 +124,13 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 
 	addr := cpu.pc
 
-	var regs []string
-	for _, r := range cpu.x {
-		regs = append(regs, fmt.Sprintf("%x", uint64(r)))
+	if DEBUG {
+		var regs []string
+		for _, r := range cpu.x {
+			regs = append(regs, fmt.Sprintf("%x", uint64(r)))
+		}
+		fmt.Printf("%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
 	}
-	fmt.Printf("%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
 
 	if instr&0b11 == 0b11 {
 		cpu.pc += 4
@@ -904,16 +913,16 @@ func (cpu *CPU) readraw(addr uint64) uint8 {
 		return dtb[addr-0x00001020]
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
-		panic("nyi - clint")
+		panic(fmt.Sprintf("nyi - read clint %x", addr))
 	}
 	if addr >= 0x0C000000 && addr <= 0x0fffffff {
-		panic("nyi - plic")
+		panic(fmt.Sprintf("nyi - read plic %x", addr))
 	}
 	if addr >= 0x10000000 && addr <= 0x100000ff {
-		panic("nyi - uart")
+		return cpu.uart.readuint8(addr)
 	}
-	if addr >= 0x10001000 && addr <= 0x10001FFF {
-		panic("nyi - disk")
+	if addr >= 0x10001000 && addr <= 0x10001fff {
+		panic(fmt.Sprintf("nyi - read disk %x", addr))
 	}
 	panic(fmt.Sprintf("nyi - unsupported address %x", addr))
 }
@@ -928,18 +937,19 @@ func (cpu *CPU) writeraw(addr uint64, v byte) {
 		panic("nyi - cannot write to dtb")
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
-		panic("nyi - clint")
+		panic(fmt.Sprintf("nyi - write clint %x: %x", addr, v))
 	}
 	if addr >= 0x0C000000 && addr <= 0x0fffffff {
-		panic("nyi - plic")
+		panic(fmt.Sprintf("nyi - write plic %x: %x", addr, v))
 	}
 	if addr >= 0x10000000 && addr <= 0x100000ff {
-		panic("nyi - uart")
+		cpu.uart.writeuint8(addr, v)
+		return
 	}
 	if addr >= 0x10001000 && addr <= 0x10001FFF {
-		panic("nyi - disk")
+		panic(fmt.Sprintf("nyi - write disk %x: %x", addr, v))
 	}
-	panic(fmt.Sprintf("nyi - unsupported address %x", addr))
+	panic(fmt.Sprintf("nyi - unsupported address %x: %x", addr, v))
 }
 
 func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
@@ -1250,6 +1260,139 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 		}
 	default:
 		panic("compressed instruction cannot be 0b11")
+	}
+}
+
+const (
+	IER_RXINT_BIT      uint8 = 0x1
+	IER_THREINT_BIT    uint8 = 0x2
+	IIR_THR_EMPTY      uint8 = 0x2
+	IIR_RD_AVAILABLE   uint8 = 0x4
+	IIR_NO_INTERRUPT   uint8 = 0x7
+	LSR_DATA_AVAILABLE uint8 = 0x1
+	LSR_THR_EMPTY      uint8 = 0x20
+)
+
+type Uart struct {
+	rbr          uint8
+	thr          uint8
+	ier          uint8
+	iir          uint8
+	lcr          uint8
+	mcr          uint8
+	lsr          uint8
+	scr          uint8
+	threip       bool
+	interrupting bool
+}
+
+func NewUart() Uart {
+	return Uart{
+		lsr: LSR_THR_EMPTY,
+	}
+}
+
+func (uart *Uart) step(clock uint64) {
+	rxip := false
+
+	// TODO: input
+
+	if clock%0x10 == 0 && uart.thr != 0 {
+		_, err := os.Stdout.Write([]byte{uart.thr})
+		if err != nil {
+			panic("unable to write byte")
+		}
+		uart.thr = 0
+		uart.lsr |= LSR_THR_EMPTY
+		uart.updateIIR()
+		if uart.ier&IER_THREINT_BIT != 0 {
+			uart.threip = true
+		}
+	}
+
+	if uart.threip || rxip {
+		uart.interrupting = true
+		uart.threip = false
+	} else {
+		uart.interrupting = false
+	}
+}
+
+func (uart *Uart) updateIIR() {
+	rxip := uart.ier&IER_RXINT_BIT != 0 && uart.rbr != 0
+	threip := uart.ier&IER_THREINT_BIT != 0 && uart.thr == 0
+	if rxip {
+		uart.iir = IIR_RD_AVAILABLE
+	} else if threip {
+		uart.iir = IIR_THR_EMPTY
+	} else {
+		uart.iir = IIR_NO_INTERRUPT
+	}
+}
+
+func (uart *Uart) readuint8(addr uint64) (v uint8) {
+	defer func() { fmt.Printf("uart[%x] => %x\n", addr, v) }()
+	switch addr {
+	case 0x10000000:
+		if (uart.lcr >> 7) == 0 {
+			rbr := uart.rbr
+			uart.rbr = 0
+			uart.lsr &= ^LSR_DATA_AVAILABLE
+			uart.updateIIR()
+			return rbr
+		} else {
+			return 0
+		}
+	case 0x10000001:
+		if (uart.lcr >> 7) == 0 {
+			return uart.ier
+		} else {
+			return 0
+		}
+	case 0x10000002:
+		return uart.iir
+	case 0x10000003:
+		return uart.lcr
+	case 0x10000004:
+		return uart.mcr
+	case 0x10000005:
+		return uart.lsr
+	case 0x10000007:
+		return uart.scr
+	default:
+		return 0
+	}
+}
+
+func (uart *Uart) writeuint8(addr uint64, v uint8) {
+	fmt.Printf("uart[%x] <= %x\n", addr, v)
+	switch addr {
+	case 0x10000000:
+		if (uart.lcr >> 7) == 0 {
+			uart.thr = v
+			uart.lsr &= ^LSR_THR_EMPTY
+			uart.updateIIR()
+		} else {
+			// TODO: ??
+		}
+	case 0x10000001:
+		if (uart.lcr >> 7) == 0 {
+			if uart.ier&IER_THREINT_BIT == 0 && v&IER_THREINT_BIT != 0 && uart.thr == 0 {
+				uart.threip = true
+			}
+			uart.ier = v
+			uart.updateIIR()
+		} else {
+			// TODO: ??
+		}
+	case 0x10000003:
+		uart.lcr = v
+	case 0x10000004:
+		uart.mcr = v
+	case 0x10000007:
+		uart.scr = v
+	default:
+		// Do nothing
 	}
 }
 
