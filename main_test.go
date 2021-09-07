@@ -43,7 +43,7 @@ func TestFirmware(t *testing.T) {
 	debugFile, err = os.Create("trace.txt")
 	assert.NoError(t, err)
 	defer debugFile.Close()
-	DEBUG = true
+	DEBUG = false
 
 	mem := make([]byte, 0x100000000)
 	entry, err := loadElf(filepath.Join("linux", "fw_payload.elf"), mem)

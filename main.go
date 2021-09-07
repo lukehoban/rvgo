@@ -13,6 +13,10 @@ var DEBUG = false
 var debugFile *os.File
 
 const (
+	FFLAGS = 0x001
+	FRM    = 0x002
+	FCSR   = 0x003
+
 	MVENDORID = 0xF11
 	MARCHID   = 0xF12
 	MIMPID    = 0xF13
@@ -75,6 +79,14 @@ const (
 	Machine    Privilege = 3
 )
 
+type AddressMode uint8
+
+const (
+	None AddressMode = 0
+	SV39 AddressMode = 8
+	SV48 AddressMode = 9
+)
+
 //go:embed dtb/dtb.dtb
 var dtb []byte
 
@@ -85,6 +97,7 @@ type CPU struct {
 	f    [32]float64
 	csr  [4096]uint64
 	priv Privilege
+	mode AddressMode
 	wfi  bool
 
 	reservation    uint64
@@ -108,7 +121,7 @@ func NewCPU(mem []byte, pc uint64) CPU {
 	}
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
-	cpu.csr[MISA] = 0x800000008014312f
+	cpu.writecsr(MISA, 0x800000008014312f)
 	return cpu
 }
 
@@ -209,7 +222,7 @@ func (cpu *CPU) exception(reason TrapReason, trapaddr uint64, instructionaddr ui
 }
 
 func (cpu *CPU) interrupt(pc uint64) {
-	minterrupt := cpu.csr[MIP] & cpu.csr[MIE]
+	minterrupt := cpu.readcsr(MIP) & cpu.readcsr(MIE)
 	if minterrupt&MIP_MEIP != 0 {
 		panic("nyi - handle MachineExternalInterrupt")
 	}
@@ -233,9 +246,9 @@ func (cpu *CPU) interrupt(pc uint64) {
 func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool) bool {
 	var mdeleg, sdeleg uint64
 	if isInterrupt {
-		mdeleg, sdeleg = cpu.csr[MIDELEG], cpu.csr[SIDELEG]
+		mdeleg, sdeleg = cpu.readcsr(MIDELEG), cpu.readcsr(SIDELEG)
 	} else {
-		mdeleg, sdeleg = cpu.csr[MEDELEG], cpu.csr[SEDELEG]
+		mdeleg, sdeleg = cpu.readcsr(MEDELEG), cpu.readcsr(SEDELEG)
 	}
 	pos := uint64(reason) & 0xFFFF
 
@@ -252,7 +265,7 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 
 	cpu.priv = handlePriv
 
-	var epcAddr, causeAddr, tvalAddr, tvecAddr uint64
+	var epcAddr, causeAddr, tvalAddr, tvecAddr uint16
 	switch cpu.priv {
 	case Machine:
 		epcAddr, causeAddr, tvalAddr, tvecAddr = MEPC, MCAUSE, MTVAL, MTVEC
@@ -262,10 +275,10 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 		panic("not yet implemented non-machine privilege")
 	}
 
-	cpu.csr[epcAddr] = addr
-	cpu.csr[causeAddr] = uint64(reason)
-	cpu.csr[tvalAddr] = trapaddr
-	cpu.pc = cpu.csr[tvecAddr]
+	cpu.writecsr(epcAddr, addr)
+	cpu.writecsr(causeAddr, uint64(reason))
+	cpu.writecsr(tvalAddr, trapaddr)
+	cpu.pc = cpu.readcsr(tvecAddr)
 	if (cpu.pc & 0b11) != 0 {
 		panic("vector type address")
 		cpu.pc = (cpu.pc>>2)<<2 + (4 * (uint64(reason) & 0xFFFF))
@@ -710,7 +723,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b000100000010: // SRET
 				panic("nyi - SRET")
 			case 0b001100000010: // MRET
-				cpu.pc = cpu.csr[MEPC]
+				cpu.pc = cpu.readcsr(MEPC)
 				cpu.priv = cpu.getMPP()
 				cpu.setMIE(cpu.getMPIE())
 				cpu.setMPIE(1)
@@ -730,30 +743,30 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				}
 			}
 		case 0b001: // CSRRW
-			t := cpu.csr[op.csr]
-			cpu.csr[op.csr] = uint64(cpu.x[op.rs])
+			t := cpu.readcsr(uint16(op.csr))
+			cpu.writecsr(uint16(op.csr), uint64(cpu.x[op.rs]))
 			cpu.x[op.rd] = int64(t)
 		case 0b010: // CSRRS
-			t := cpu.csr[op.csr]
-			cpu.csr[op.csr] |= uint64(cpu.x[op.rs])
+			t := cpu.readcsr(uint16(op.csr))
+			cpu.writecsr(uint16(op.csr), t|uint64(cpu.x[op.rs]))
 			cpu.x[op.rd] = int64(t)
 		case 0b011: // CSRRC
-			t := cpu.csr[op.csr]
+			t := cpu.readcsr(uint16(op.csr))
 			trs := cpu.x[op.rs]
 			cpu.x[op.rd] = int64(t)
-			cpu.csr[op.csr] = uint64(cpu.x[op.rd] & ^trs)
+			cpu.writecsr(uint16(op.csr), uint64(cpu.x[op.rd] & ^trs))
 		case 0b101: // CSRRWI
-			t := cpu.csr[op.csr]
+			t := cpu.readcsr(uint16(op.csr))
 			cpu.x[op.rd] = int64(t)
-			cpu.csr[op.csr] = uint64(op.rs)
+			cpu.writecsr(uint16(op.csr), uint64(op.rs))
 		case 0b110: // CSRRSI
-			t := cpu.csr[op.csr]
+			t := cpu.readcsr(uint16(op.csr))
 			cpu.x[op.rd] = int64(t)
-			cpu.csr[op.csr] = uint64(cpu.x[op.rd] | int64(op.rs))
+			cpu.writecsr(uint16(op.csr), uint64(cpu.x[op.rd]|int64(op.rs)))
 		case 0b111: // CSRRCI
-			t := cpu.csr[op.csr]
+			t := cpu.readcsr(uint16(op.csr))
 			cpu.x[op.rd] = int64(t)
-			cpu.csr[op.csr] = uint64(cpu.x[op.rd] & ^int64(op.rs))
+			cpu.writecsr(uint16(op.csr), uint64(cpu.x[op.rd] & ^int64(op.rs)))
 		default:
 			panic("invalid insruction")
 		}
@@ -967,19 +980,19 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 }
 
 func (cpu *CPU) getMPP() Privilege {
-	return Privilege((cpu.csr[MSTATUS] >> 11) & 0b11)
+	return Privilege((cpu.readcsr(MSTATUS) >> 11) & 0b11)
 }
 
 func (cpu *CPU) setMPP(v uint64) {
-	cpu.csr[MSTATUS] |= (v & 0b11) << 11
+	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b11)<<11)
 }
 
 func (cpu *CPU) getMIE() uint64 {
-	return (cpu.csr[MSTATUS] >> 3) & 0b1
+	return (cpu.readcsr(MSTATUS) >> 3) & 0b1
 }
 
 func (cpu *CPU) setMIE(v uint64) {
-	cpu.csr[MSTATUS] |= (v & 0b1) << 3
+	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b1)<<3)
 }
 
 func (cpu *CPU) getMPIE() uint64 {
@@ -987,10 +1000,60 @@ func (cpu *CPU) getMPIE() uint64 {
 }
 
 func (cpu *CPU) setMPIE(v uint64) {
-	cpu.csr[MSTATUS] |= (v & 0b1) << 7
+	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b1)<<7)
+}
+
+func (cpu *CPU) readcsr(csr uint16) uint64 {
+	switch csr {
+	case FFLAGS:
+		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] ", csr))
+	case FRM:
+		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] ", csr))
+	case SSTATUS:
+		return cpu.csr[MSTATUS] & 0x80000003000de162
+	case SIE:
+		return cpu.csr[MIE] & 0x222
+	case SIP:
+		return cpu.csr[SIP] & 0x22
+	case TIME:
+		return cpu.clint.mtime
+	}
+	return cpu.csr[csr]
+}
+
+func (cpu *CPU) writecsr(csr uint16, v uint64) {
+	switch csr {
+	case FFLAGS:
+		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] = %x", csr, v))
+	case FRM:
+		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] = %x", csr, v))
+	case SSTATUS:
+		cpu.csr[MSTATUS] = cpu.csr[MSTATUS]&^0x80000003000de162 | v&0x80000003000de162
+	case SIE:
+		cpu.csr[MIE] = cpu.csr[MIE]&^0x222 | v&0x222
+	case SIP:
+		cpu.csr[MIP] = cpu.csr[MIP]&^0x222 | v&0x222
+	case TIME:
+		cpu.clint.mtime = v
+	case MIDELEG:
+		cpu.csr[csr] = v & 0x666
+	case SATP:
+		switch v >> 60 {
+		case 0, 8, 9:
+			cpu.mode = AddressMode(v >> 60)
+		default:
+			panic("invalid addressing mode")
+		}
+		cpu.csr[csr] = v
+	default:
+		cpu.csr[csr] = v
+	}
 }
 
 func (cpu *CPU) readraw(addr uint64) uint8 {
+	if cpu.mode != 0 {
+		panic(fmt.Sprintf("nyi - addressing mode %d", cpu.mode))
+	}
 	if addr >= 0x80000000 {
 		// TODO: allow the ram to be smaller (-0x80000000)
 		return cpu.mem[addr]
