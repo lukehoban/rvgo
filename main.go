@@ -87,6 +87,15 @@ const (
 	SV48 AddressMode = 9
 )
 
+type Access uint8
+
+const (
+	Read    Access = 0
+	Write   Access = 1
+	Execute Access = 2
+	Unknown Access = 3
+)
+
 //go:embed dtb/dtb.dtb
 var dtb []byte
 
@@ -181,7 +190,16 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 }
 
 func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
-	return cpu.readuint32(cpu.pc)
+	v := uint32(0)
+	for i := uint64(0); i < 4; i++ {
+		paddr, ok := cpu.virtualToPhysical(cpu.pc+i, Execute)
+		if !ok {
+			return 0, false, InstructionPageFault
+		}
+		x := cpu.readphysical(paddr)
+		v |= uint32(x) << (i * 8)
+	}
+	return v, true, 0
 }
 
 type TrapReason int64
@@ -252,6 +270,7 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 	}
 	pos := uint64(reason) & 0xFFFF
 
+	fromPriv := cpu.priv
 	var handlePriv Privilege
 	if (mdeleg>>pos)&1 == 0 {
 		handlePriv = Machine
@@ -269,10 +288,12 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 	switch cpu.priv {
 	case Machine:
 		epcAddr, causeAddr, tvalAddr, tvecAddr = MEPC, MCAUSE, MTVAL, MTVEC
+	case Supervisor:
+		epcAddr, causeAddr, tvalAddr, tvecAddr = SEPC, SCAUSE, STVAL, STVEC
 	case User:
 		epcAddr, causeAddr, tvalAddr, tvecAddr = UEPC, UCAUSE, UTVAL, UTVEC
 	default:
-		panic("not yet implemented non-machine privilege")
+		panic("invalid privilege")
 	}
 
 	cpu.writecsr(epcAddr, addr)
@@ -286,15 +307,19 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 
 	switch cpu.priv {
 	case Machine:
-		cpu.setMPIE(cpu.getMIE())
-		cpu.setMIE(0)
-		cpu.setMPP(uint64(cpu.priv))
+		status := cpu.readcsr(MSTATUS)
+		mie := (status >> 3) & 0b1
+		status = (status &^ 0x1888) | mie<<7 | uint64(fromPriv)<<11
+		cpu.writecsr(MSTATUS, status)
+	case Supervisor:
+		status := cpu.readcsr(SSTATUS)
+		sie := (status >> 1) & 0b1
+		status = (status &^ 0x122) | sie<<5 | uint64(fromPriv&1)<<8
+		cpu.writecsr(SSTATUS, status)
 	case User:
-		cpu.setMPIE(cpu.getMIE())
-		cpu.setMIE(0)
-		cpu.setMPP(uint64(cpu.priv))
+		panic("nyi - user mode exception handler")
 	default:
-		panic("not yet implemented non-machine privilege")
+		panic("invalid privilege")
 	}
 
 	return true
@@ -1050,10 +1075,97 @@ func (cpu *CPU) writecsr(csr uint16, v uint64) {
 	}
 }
 
-func (cpu *CPU) readraw(addr uint64) uint8 {
-	if cpu.mode != 0 {
-		panic(fmt.Sprintf("nyi - addressing mode %d", cpu.mode))
+func (cpu *CPU) virtualToPhysical(vaddr uint64, access Access) (uint64, bool) {
+	switch cpu.mode {
+	case 0:
+		return vaddr, true
+	case 8:
+		rootppn := cpu.readcsr(SATP) & 0xfffffffffff
+		switch cpu.priv {
+		case Machine:
+			if (cpu.readcsr(MSTATUS)>>17)&1 == 0 {
+				return vaddr, true
+			}
+			panic(fmt.Sprintf("nyi - MSTATUS>>17==1 machine mode addressing mode %d addr %x", cpu.mode, vaddr))
+		case User, Supervisor:
+			vpns := []uint64{(vaddr >> 12) & 0x1ff, (vaddr >> 21) & 0x1ff, (vaddr >> 30) & 0x1ff}
+			paddr, ok := cpu.walkPageTables(vaddr, 3-1, rootppn, vpns, access)
+			if !ok {
+				return 0, false
+			}
+			return paddr, true
+		default:
+			panic("invalid CPU priv")
+		}
+	default:
+		panic("invalid addressing mode")
 	}
+}
+
+func (cpu *CPU) walkPageTables(vaddr uint64, level uint8, parentppn uint64, vpns []uint64, access Access) (uint64, bool) {
+	// fmt.Printf("walkPageTables: %x, %d, %x, %x\n", vaddr, level, parentppn, vpns)
+	pagesize := uint64(4096)
+	ptesize := uint64(8)
+	pteaddr := parentppn*pagesize + vpns[level]*ptesize
+	pte := cpu.readphysicaluint64(pteaddr)
+	ppn := (pte >> 10) & 0xfffffffffff
+	ppns := []uint64{(pte >> 10) & 0x1ff, (pte >> 19) & 0x1ff, (pte >> 28) & 0x3ffffff}
+	// rsw := (pte >> 8) & 0b11
+	d := (pte >> 7) & 0b1
+	a := (pte >> 6) & 0b1
+	// g := (pte >> 5) & 0b1
+	// u := (pte >> 4) & 0b1
+	x := (pte >> 3) & 0b1
+	w := (pte >> 2) & 0b1
+	r := (pte >> 1) & 0b1
+	v := (pte >> 0) & 0b1
+
+	if v == 0 || (r == 0 && w == 1) { // Not valid, or invalid write-only
+		return 0, false
+	}
+
+	if r == 0 && x == 0 {
+		if level == 0 { // pointer to page table entry at leaf layer
+			return 0, false
+		}
+		return cpu.walkPageTables(vaddr, level-1, ppn, vpns, access)
+	}
+
+	if a == 0 || (access == Write && d == 0) {
+		panic("nyi - a and d")
+	}
+
+	if (access == Execute && x == 0) || (access == Read && r == 0) || (access == Write && w == 0) {
+		return 0, false
+	}
+
+	offset := vaddr & 0xfff
+	if level == 2 {
+		if ppns[1] != 0 || ppns[0] != 0 {
+			return 0, false
+		}
+		return ppns[2]<<30 | vpns[1]<<21 | vpns[0]<<12 | offset, true
+	} else if level == 1 {
+		if ppns[0] != 0 {
+			return 0, false
+		}
+		return ppns[2]<<30 | ppns[1]<<21 | vpns[0]<<12 | offset, true
+	} else if level == 0 {
+		return ppn<<12 | offset, true
+	}
+
+	panic("invalid level")
+}
+
+func (cpu *CPU) readraw(vaddr uint64) (uint8, bool) {
+	paddr, ok := cpu.virtualToPhysical(vaddr, Read)
+	if !ok {
+		return 0, false
+	}
+	return cpu.readphysical(paddr), true
+}
+
+func (cpu *CPU) readphysical(addr uint64) uint8 {
 	if addr >= 0x80000000 {
 		// TODO: allow the ram to be smaller (-0x80000000)
 		return cpu.mem[addr]
@@ -1080,7 +1192,24 @@ func (cpu *CPU) readraw(addr uint64) uint8 {
 	panic(fmt.Sprintf("nyi - unsupported address %x", addr))
 }
 
-func (cpu *CPU) writeraw(addr uint64, v byte) {
+func (cpu *CPU) readphysicaluint64(addr uint64) uint64 {
+	val := uint64(0)
+	for i := uint64(0); i < 8; i++ {
+		val |= (uint64(cpu.readphysical(addr+i)) << (i * 8))
+	}
+	return val
+}
+
+func (cpu *CPU) writeraw(vaddr uint64, v byte) bool {
+	paddr, ok := cpu.virtualToPhysical(vaddr, Write)
+	if !ok {
+		return false
+	}
+	cpu.writephysical(paddr, v)
+	return true
+}
+
+func (cpu *CPU) writephysical(addr uint64, v byte) {
 	if addr >= 0x80000000 {
 		// TODO: allow the ram to be smaller (-0x80000000)
 		cpu.mem[addr] = v
@@ -1110,7 +1239,11 @@ func (cpu *CPU) writeraw(addr uint64, v byte) {
 func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
 	val := uint64(0)
 	for i := uint64(0); i < 8; i++ {
-		val |= (uint64(cpu.readraw(addr+i)) << (i * 8))
+		x, ok := cpu.readraw(addr + i)
+		if !ok {
+			return 0, false, 0
+		}
+		val |= uint64(x) << (i * 8)
 	}
 	return val, true, 0
 }
@@ -1118,7 +1251,11 @@ func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
 func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
 	val := uint32(0)
 	for i := uint64(0); i < 4; i++ {
-		val |= (uint32(cpu.readraw(addr+i)) << (i * 8))
+		x, ok := cpu.readraw(addr + i)
+		if !ok {
+			return 0, false, 0
+		}
+		val |= uint32(x) << (i * 8)
 	}
 	return val, true, 0
 }
@@ -1126,38 +1263,58 @@ func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
 func (cpu *CPU) readuint16(addr uint64) (uint16, bool, TrapReason) {
 	val := uint16(0)
 	for i := uint64(0); i < 2; i++ {
-		val |= (uint16(cpu.readraw(addr+i)) << (i * 8))
+		x, ok := cpu.readraw(addr + i)
+		if !ok {
+			return 0, false, 0
+		}
+		val |= uint16(x) << (i * 8)
 	}
 	return val, true, 0
 }
 
 func (cpu *CPU) readuint8(addr uint64) (uint8, bool, TrapReason) {
-	return cpu.readraw(addr), true, 0
+	x, ok := cpu.readraw(addr)
+	if !ok {
+		return 0, false, 0
+	}
+	return x, true, 0
 }
 
 func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, TrapReason) {
 	for i := uint64(0); i < 8; i++ {
-		cpu.writeraw(addr+i, byte(val>>(i*8)))
+		ok := cpu.writeraw(addr+i, byte(val>>(i*8)))
+		if !ok {
+			return false, 0
+		}
 	}
 	return true, 0
 }
 
 func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, TrapReason) {
 	for i := uint64(0); i < 4; i++ {
-		cpu.writeraw(addr+i, byte(val>>(i*8)))
+		ok := cpu.writeraw(addr+i, byte(val>>(i*8)))
+		if !ok {
+			return false, 0
+		}
 	}
 	return true, 0
 }
 
 func (cpu *CPU) writeuint16(addr uint64, val uint16) (bool, TrapReason) {
 	for i := uint64(0); i < 2; i++ {
-		cpu.writeraw(addr+i, byte(val>>(i*8)))
+		ok := cpu.writeraw(addr+i, byte(val>>(i*8)))
+		if !ok {
+			return false, 0
+		}
 	}
 	return true, 0
 }
 
 func (cpu *CPU) writeuint8(addr uint64, val uint8) (bool, TrapReason) {
-	cpu.writeraw(addr, byte(val))
+	ok := cpu.writeraw(addr, byte(val))
+	if !ok {
+		return false, 0
+	}
 	return true, 0
 }
 

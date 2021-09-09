@@ -52,7 +52,7 @@ func TestFirmware(t *testing.T) {
 
 	defer func() {
 		err := recover()
-		fmt.Printf("finished at cycle: %d\n", cpu.count)
+		fmt.Printf("finished at cycle: %d -- pc==%x\n", cpu.count, cpu.pc)
 		assert.Nil(t, err)
 	}()
 
