@@ -1069,8 +1069,13 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		default:
 			panic("nyi - atomic")
 		}
-	case 0b0000111:
-		panic("nyi - flw")
+	case 0b0000111: // FLW
+		op := parseI(instr)
+		v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
+		if !ok {
+			return false, reason, addr
+		}
+		cpu.f[op.rd] = math.Float64frombits(uint64(int64(int32(v))))
 	case 0b0100111:
 		panic("nyi - fsw")
 	case 0b1000011:
@@ -1106,7 +1111,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			panic("nyi - FEQ.S/*")
 		case 0b1101000:
 			panic("nyi - FCVT.S.W*")
-		case 0b1111000:
+		case 0b1111000: // FMV.W.X
 			op := parseR(instr)
 			cpu.f[op.rd] = math.Float64frombits(uint64(uint32(cpu.x[op.rs1])))
 		default:
