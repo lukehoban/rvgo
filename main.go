@@ -501,7 +501,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				cpu.pc = addr + uint64(op.imm)
 			}
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	case 0b0000011:
 		op := parseI(instr)
@@ -549,7 +549,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			}
 			cpu.x[op.rd] = int64(uint64(data))
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	case 0b0100011:
 		op := parseS(instr)
@@ -563,7 +563,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b011: // SD
 			cpu.writeuint64(uint64(cpu.x[op.rs1]+int64(op.imm)), uint64(cpu.x[op.rs2]))
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	case 0b0010011:
 		op := parseI(instr)
@@ -590,7 +590,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.x[op.rd] = cpu.x[op.rs1] & int64(op.imm)
 		case 0b001: // SLLI
 			if op.imm>>6 != 0 {
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 			cpu.x[op.rd] = cpu.x[op.rs1] << op.imm
 		case 0b101:
@@ -600,10 +600,10 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b010000: // SRAI
 				cpu.x[op.rd] = cpu.x[op.rs1] >> (op.imm & 0b111111)
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	case 0b0110011:
 		op := parseR(instr)
@@ -617,7 +617,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0000001: // MUL
 				cpu.x[op.rd] = cpu.x[op.rs1] * cpu.x[op.rs2]
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b001:
 			switch op.funct7 {
@@ -626,7 +626,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 1: // MULH
 				panic("nyi - MULH")
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b010:
 			switch op.funct7 {
@@ -639,7 +639,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 1: // MULHSU
 				panic("nyi - MULHSU")
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b011:
 			switch op.funct7 {
@@ -652,7 +652,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 1: // MULHU
 				panic("nyi - MULHU")
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b100:
 			switch op.funct7 {
@@ -661,7 +661,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 1: // DIV
 				panic("nyi - DIV")
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b101:
 			switch op.funct7 {
@@ -679,7 +679,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 					cpu.x[op.rd] = int64(a1 / a2)
 				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b110:
 			switch op.funct7 {
@@ -697,7 +697,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 					cpu.x[op.rd] = a1 % a2
 				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b111:
 			switch op.funct7 {
@@ -713,10 +713,10 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 					cpu.x[op.rd] = int64(a1 % a2)
 				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	case 0b0001111: // FENCE/FENCE.I
 		// TODO: Is it okay to do nothing?
@@ -724,8 +724,8 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		op := parseCSR(instr)
 		switch op.funct3 {
 		case 0b000:
-			if op.funct3 != 0 || op.rd != 0 || op.rs != 0 {
-				panic("invalid insruction")
+			if op.rd != 0 {
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 			switch op.csr {
 			case 0: // ECALL
@@ -764,7 +764,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				case 0b1010001:
 					panic("nyi - HFENCE.GVMA")
 				default:
-					panic("nyi - invalid instruction")
+					panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 				}
 			}
 		case 0b001: // CSRRW
@@ -793,7 +793,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.x[op.rd] = int64(t)
 			cpu.writecsr(uint16(op.csr), uint64(cpu.x[op.rd] & ^int64(op.rs)))
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	case 0b0111011:
 		op := parseR(instr)
@@ -805,16 +805,16 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b0100000: // SUB
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) - int32(cpu.x[op.rs2]))
 			case 1: // MULW
-				panic("nyi - MULW")
+				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) * int32(cpu.x[op.rs2]))
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b001:
 			switch op.funct7 {
 			case 0:
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) << (cpu.x[op.rs2] & 0b11111))
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b100:
 			switch op.funct7 {
@@ -827,10 +827,10 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				} else if a1 == math.MinInt32 && a2 == -1 {
 					cpu.x[op.rd] = int64(a1)
 				} else {
-					cpu.x[op.rd] = int64(int32(a1 / a2))
+					cpu.x[op.rd] = int64(a1 / a2)
 				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b101:
 			switch op.funct7 {
@@ -848,14 +848,23 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 					cpu.x[op.rd] = int64(int32(a1 / a2))
 				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b110:
 			switch op.funct7 {
 			case 1: // REMW
-				panic("nyi - REMW")
+				op := parseR(instr)
+				a1 := int32(cpu.x[op.rs1])
+				a2 := int32(cpu.x[op.rs2])
+				if a2 == 0 {
+					cpu.x[op.rd] = int64(a1)
+				} else if a1 == math.MinInt32 && a2 == -1 {
+					cpu.x[op.rd] = 0
+				} else {
+					cpu.x[op.rd] = int64(a1 % a2)
+				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b111:
 			switch op.funct7 {
@@ -869,7 +878,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 					cpu.x[op.rd] = int64(int32(a1 % a2))
 				}
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		default:
 			panic("nyi - 0111011")
@@ -919,9 +928,25 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b00100:
 			panic("nyi - AMOXOR.W")
 		case 0b01100:
-			panic("nyi - AMOAND.W")
+			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+			if !ok {
+				return false, reason, addr
+			}
+			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]&int64(int32(v))))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.x[op.rd] = int64(int32(v))
 		case 0b01000:
-			panic("nyi - AMOOR.W")
+			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+			if !ok {
+				return false, reason, addr
+			}
+			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]|int64(int32(v))))
+			if !ok {
+				return false, reason, addr
+			}
+			cpu.x[op.rd] = int64(int32(v))
 		case 0b10000:
 			panic("nyi - AMOMIN.W")
 		case 0b10100:
@@ -983,7 +1008,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] + int64(op.imm)))
 		case 0b001: // SLLIW
 			if op.imm>>5 != 0 {
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 			cpu.x[op.rd] = int64(int32(cpu.x[op.rs1] << op.imm))
 		case 0b101:
@@ -993,10 +1018,10 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b010000: // SRAIW
 				cpu.x[op.rd] = int64(int32(cpu.x[op.rs1]) >> (op.imm & 0b111111))
 			default:
-				panic("invalid insruction")
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		default:
-			panic("invalid insruction")
+			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
 	default:
 		panic(fmt.Sprintf("nyi - opcode %x", instr&0x7f))
