@@ -650,7 +650,18 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 					cpu.x[op.rd] = 0
 				}
 			case 1: // MULHU
-				panic("nyi - MULHU")
+				a := uint64(cpu.x[op.rs1])
+				b := uint64(cpu.x[op.rs2])
+				alo := a & 0xffffffff
+				ahi := (a >> 32) & 0xffffffff
+				blo := b & 0xffffffff
+				bhi := (b >> 32) & 0xffffffff
+				axbhi := ahi * bhi
+				axbmid := ahi * blo
+				bxamid := alo * bhi
+				axblo := alo * blo
+				carry := (uint64(uint32(axbmid)) + uint64(uint32(bxamid)) + axblo>>32) >> 32
+				cpu.x[op.rd] = int64(axbhi + axbmid>>32 + bxamid>>32 + carry)
 			default:
 				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
@@ -659,7 +670,16 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0: // XOR
 				cpu.x[op.rd] = cpu.x[op.rs1] ^ cpu.x[op.rs2]
 			case 1: // DIV
-				panic("nyi - DIV")
+				op := parseR(instr)
+				a1 := cpu.x[op.rs1]
+				a2 := cpu.x[op.rs2]
+				if a2 == 0 {
+					cpu.x[op.rd] = -1
+				} else if a1 == math.MinInt64 && a2 == -1 {
+					cpu.x[op.rd] = a1
+				} else {
+					cpu.x[op.rd] = a1 / a2
+				}
 			default:
 				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
@@ -886,67 +906,156 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	case 0b0101111:
 		op := parseR(instr)
 		switch op.funct7 >> 2 {
-		case 0b00010: // LR.W
-			op := parseR(instr)
-			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
-			if !ok {
-				return false, reason, addr
+		case 0b00010:
+			switch op.funct3 {
+			case 0b010: // LR.W
+				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.reservationSet = true
+				cpu.reservation = uint64(cpu.x[op.rs1])
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // LR.D
+				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.reservationSet = true
+				cpu.reservation = uint64(cpu.x[op.rs1])
+				cpu.x[op.rd] = int64(v)
+			default:
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
-			cpu.reservationSet = true
-			cpu.reservation = uint64(cpu.x[op.rs1])
-			cpu.x[op.rd] = int64(int32(v))
-		case 0b00011: // SC.W
-			op := parseR(instr)
-			if cpu.reservationSet && cpu.reservation == uint64(cpu.x[op.rs1]) {
-				cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
-				cpu.reservationSet = false
-				cpu.x[op.rd] = 0
-			} else {
-				cpu.x[op.rd] = 1
+		case 0b00011:
+			switch op.funct3 {
+			case 0b010: // SC.W
+				if cpu.reservationSet && cpu.reservation == uint64(cpu.x[op.rs1]) {
+					ok, reason := cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
+					if !ok {
+						return false, reason, addr
+					}
+					cpu.reservationSet = false
+					cpu.x[op.rd] = 0
+				} else {
+					cpu.x[op.rd] = 1
+				}
+			case 0b011: // SC.D
+				if cpu.reservationSet && cpu.reservation == uint64(cpu.x[op.rs1]) {
+					ok, reason := cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]))
+					if !ok {
+						return false, reason, addr
+					}
+					cpu.reservationSet = false
+					cpu.x[op.rd] = 0
+				} else {
+					cpu.x[op.rd] = 1
+				}
+			default:
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
-		case 0b00001: // AMOSWAP.W
-			op := parseR(instr)
-			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
-			if !ok {
-				return false, reason, addr
+		case 0b00001:
+			switch op.funct3 {
+			case 0b010: // AMOSWAP.W
+				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOSWAP.D
+				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(v)
+			default:
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
-			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
-			if !ok {
-				return false, reason, addr
+		case 0b00000:
+			switch op.funct3 {
+			case 0b010: // AMOADD.W
+				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]+int64(int32(v))))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOADD.D
+				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]+int64(v)))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(v)
+			default:
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
-			cpu.x[op.rd] = int64(int32(v))
-		case 0b00000: // AMOADD.W
-			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
-			if !ok {
-				return false, reason, addr
-			}
-			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]+int64(int32(v))))
-			if !ok {
-				return false, reason, addr
-			}
-			cpu.x[op.rd] = int64(int32(v))
 		case 0b00100:
 			panic("nyi - AMOXOR.W")
 		case 0b01100:
-			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
-			if !ok {
-				return false, reason, addr
+			switch op.funct3 {
+			case 0b010: // AMOAND.W
+				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]&int64(int32(v))))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOAND.D
+				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]&int64(v)))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(v)
+			default:
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
-			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]&int64(int32(v))))
-			if !ok {
-				return false, reason, addr
-			}
-			cpu.x[op.rd] = int64(int32(v))
 		case 0b01000:
-			v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
-			if !ok {
-				return false, reason, addr
+			switch op.funct3 {
+			case 0b010: // AMOOR.W
+				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]|int64(int32(v))))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOOR.D
+				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, reason, addr
+				}
+				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]|int64(v)))
+				if !ok {
+					return false, reason, addr
+				}
+				cpu.x[op.rd] = int64(v)
+			default:
+				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
-			ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]|int64(int32(v))))
-			if !ok {
-				return false, reason, addr
-			}
-			cpu.x[op.rd] = int64(int32(v))
 		case 0b10000:
 			panic("nyi - AMOMIN.W")
 		case 0b10100:
@@ -1657,9 +1766,21 @@ func (plic *Plic) step(clock uint64, uartip bool, mip *uint64) {
 }
 
 func (plic *Plic) readuint8(addr uint64) (v uint8) {
-	// defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
-	// fmt.Printf("warning: ignored plic[%x] =>\n", addr)
-	panic("nyi - read from plic")
+	defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
+	if addr >= 0x0c000000 && addr <= 0x0c000fff {
+		panic("nyi - read from  plicpriorities")
+	} else if addr >= 0x001000 && addr <= 0xc00107f {
+		panic("nyi - read from  plic ips")
+	} else if addr >= 0x0c002080 && addr <= 0x0c002087 {
+		return uint8(plic.enabled >> ((addr - 0x0c002080) * 8))
+	} else if addr >= 0x0c201000 && addr <= 0x0c201003 {
+		return uint8(plic.threshold >> ((addr - 0x0c201000) * 8))
+	} else if addr >= 0x0c201004 && addr <= 0x0c201007 {
+		return uint8(plic.irq >> ((addr - 0x0c201004) * 8))
+	} else {
+		fmt.Printf("warning: ignored plic[%x] => \n", addr)
+		return 0
+	}
 }
 
 func (plic *Plic) writeuint8(addr uint64, v uint8) {
