@@ -1148,10 +1148,6 @@ func (cpu *CPU) setMPP(v uint64) {
 	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b11)<<11)
 }
 
-func (cpu *CPU) getMIE() uint64 {
-	return (cpu.readcsr(MSTATUS) >> 3) & 0b1
-}
-
 func (cpu *CPU) setMIE(v uint64) {
 	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b1)<<3)
 }
