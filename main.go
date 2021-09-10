@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var MEMORYBASE uint64 = 0x80000000
+
 var DEBUG = false
 var debugFile *os.File
 
@@ -1300,9 +1302,8 @@ func (cpu *CPU) readraw(vaddr uint64) (uint8, bool) {
 }
 
 func (cpu *CPU) readphysical(addr uint64) uint8 {
-	if addr >= 0x80000000 {
-		// TODO: allow the ram to be smaller (-0x80000000)
-		return cpu.mem[addr]
+	if addr >= MEMORYBASE {
+		return cpu.mem[addr-MEMORYBASE]
 	}
 	if addr >= 0x00001020 && addr <= 0x00001fff {
 		daddr := addr - 0x00001020
@@ -1344,9 +1345,8 @@ func (cpu *CPU) writeraw(vaddr uint64, v byte) bool {
 }
 
 func (cpu *CPU) writephysical(addr uint64, v byte) {
-	if addr >= 0x80000000 {
-		// TODO: allow the ram to be smaller (-0x80000000)
-		cpu.mem[addr] = v
+	if addr >= MEMORYBASE {
+		cpu.mem[addr-MEMORYBASE] = v
 		return
 	}
 	if addr >= 0x00001020 && addr <= 0x00001fff {
@@ -1766,7 +1766,7 @@ func (plic *Plic) step(clock uint64, uartip bool, mip *uint64) {
 }
 
 func (plic *Plic) readuint8(addr uint64) (v uint8) {
-	defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
+	// defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
 	if addr >= 0x0c000000 && addr <= 0x0c000fff {
 		panic("nyi - read from  plicpriorities")
 	} else if addr >= 0x001000 && addr <= 0xc00107f {
@@ -1940,7 +1940,11 @@ func loadElf(file string, mem []byte) (uint64, error) {
 	}
 	defer f.Close()
 	for _, prog := range f.Progs {
-		n, err := prog.ReadAt(mem[prog.Paddr:prog.Paddr+prog.Filesz], 0)
+		if prog.Paddr < MEMORYBASE {
+			panic("ELF memory segment below 0x80000000 mapped to RAM")
+		}
+		memaddr := prog.Paddr - MEMORYBASE
+		n, err := prog.ReadAt(mem[memaddr:memaddr+prog.Filesz], 0)
 		if err != nil {
 			return 0, err
 		}
@@ -1948,7 +1952,7 @@ func loadElf(file string, mem []byte) (uint64, error) {
 			return 0, fmt.Errorf("didn't read full section")
 		}
 		for i := prog.Filesz; i < prog.Memsz; i++ {
-			mem[prog.Paddr+i] = 0
+			mem[memaddr+i] = 0
 		}
 	}
 	return f.Entry, nil
