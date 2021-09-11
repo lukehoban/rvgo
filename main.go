@@ -117,11 +117,12 @@ type CPU struct {
 	uart  Uart
 	plic  Plic
 	clint Clint
+	disk  VirtioBlock
 
 	count uint64
 }
 
-func NewCPU(mem []byte, pc uint64) CPU {
+func NewCPU(mem []byte, pc uint64, disk []byte) CPU {
 	cpu := CPU{
 		pc:    pc,
 		mem:   mem,
@@ -129,6 +130,7 @@ func NewCPU(mem []byte, pc uint64) CPU {
 		uart:  NewUart(),
 		plic:  NewPlic(),
 		clint: NewClint(),
+		disk:  NewVirtioBlock(disk),
 	}
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
@@ -151,6 +153,7 @@ func (cpu *CPU) step() {
 
 	cpu.clint.step(cpu.count, &cpu.csr[MIP])
 	cpu.uart.step(cpu.count)
+	cpu.disk.step(cpu.count)
 	cpu.plic.step(cpu.count, cpu.uart.interrupting, &cpu.csr[MIP])
 	cpu.count++
 
@@ -1323,7 +1326,7 @@ func (cpu *CPU) readphysical(addr uint64) uint8 {
 		return cpu.uart.readuint8(addr)
 	}
 	if addr >= 0x10001000 && addr <= 0x10001fff {
-		panic(fmt.Sprintf("nyi - read disk %x", addr))
+		return cpu.disk.readuint8(addr)
 	}
 	panic(fmt.Sprintf("nyi - unsupported address %x", addr))
 }
@@ -1366,7 +1369,8 @@ func (cpu *CPU) writephysical(addr uint64, v byte) {
 		return
 	}
 	if addr >= 0x10001000 && addr <= 0x10001FFF {
-		panic(fmt.Sprintf("nyi - write disk %x: %x", addr, v))
+		cpu.disk.writeuint8(addr, v)
+		return
 	}
 	panic(fmt.Sprintf("nyi - unsupported address %x: %x", addr, v))
 }
@@ -1997,6 +2001,64 @@ func (clint *Clint) writeuint8(addr uint64, v uint8) {
 	}
 }
 
+type VirtioBlock struct {
+	data []uint64
+
+	guestpagesize uint32
+	status        uint32
+}
+
+func NewVirtioBlock(byts []uint8) VirtioBlock {
+	data := make([]uint64, (len(byts)+7)/8)
+	for i := range data {
+		data[i>>3] |= uint64(byts[i]) << ((i % 8) * 8)
+	}
+	return VirtioBlock{
+		data: data,
+	}
+}
+
+func (vb *VirtioBlock) step(clock uint64) {
+	// TODO
+}
+
+func (vb *VirtioBlock) readuint8(addr uint64) (v uint8) {
+	defer func() { fmt.Printf("virtioblock[%x] => %x\n", addr, v) }()
+	switch addr {
+	case 0x10001000, 0x10001001, 0x10001002, 0x10001003:
+		sh := (addr - 0x10001000) * 8
+		return uint8(uint64(0x74726976) >> sh)
+	case 0x10001004, 0x10001005, 0x10001006, 0x10001007:
+		sh := (addr - 0x10001004) * 8
+		return uint8(uint64(0x1) >> sh)
+	case 0x10001008, 0x10001009, 0x1000100a, 0x1000100b:
+		sh := (addr - 0x10001008) * 8
+		return uint8(uint64(0x2) >> sh)
+	case 0x1000100c, 0x1000100d, 0x1000100e, 0x1000100f:
+		sh := (addr - 0x1000100c) * 8
+		return uint8(uint64(0x554d4551) >> sh)
+	case 0x10001070, 0x10001071, 0x10001072, 0x10001073:
+		sh := (addr - 0x10001070) * 8
+		return uint8(vb.status >> sh)
+	default:
+		panic("nyi - read from virtio block device")
+	}
+}
+
+func (vb *VirtioBlock) writeuint8(addr uint64, v uint8) {
+	fmt.Printf("virtioblock[%x] <= %x\n", addr, v)
+	switch addr {
+	case 0x10001028, 0x10001029, 0x1000102a, 0x1000102b:
+		sh := (addr - 0x10001028) * 8
+		vb.guestpagesize = vb.guestpagesize&^(0xff<<sh) | uint32(v)<<sh
+	case 0x10001070, 0x10001071, 0x10001072, 0x10001073:
+		sh := (addr - 0x10001070) * 8
+		vb.status = vb.status&^(0xff<<sh) | uint32(v)<<sh
+	default:
+		panic("nyi - write to virtio block device")
+	}
+}
+
 func do() error {
 	mem := make([]byte, 0x100000000)
 	entry, err := loadElf("rv64ui-p-add", mem)
@@ -2004,7 +2066,7 @@ func do() error {
 		return err
 	}
 
-	cpu := NewCPU(mem, entry)
+	cpu := NewCPU(mem, entry, nil)
 	cpu.run()
 	return nil
 }
