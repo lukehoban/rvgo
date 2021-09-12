@@ -39,7 +39,7 @@ func TestRiscvTests(t *testing.T) {
 	}
 }
 
-func TestFirmware(t *testing.T) {
+func TestLinux(t *testing.T) {
 	var err error
 	debugFile, err = os.Create("trace.txt")
 	assert.NoError(t, err)
@@ -56,9 +56,10 @@ func TestFirmware(t *testing.T) {
 		end := time.Now()
 		err := recover()
 		fmt.Printf("finished at cycle: %d -- pc==%x\n", cpu.count, cpu.pc)
-		assert.GreaterOrEqual(t, cpu.count, uint64(33750123))
 		fmt.Printf("failed with: %v\n", err)
 		fmt.Printf("%0.4f MHz\n", float64(cpu.count*1000)/float64(end.UnixNano()-start.UnixNano()))
+
+		assert.GreaterOrEqual(t, cpu.count, uint64(98392937))
 	}()
 
 	for {

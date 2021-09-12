@@ -162,6 +162,7 @@ func (cpu *CPU) step() {
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	if cpu.wfi {
+		fmt.Printf("warning - waiting for interrupt")
 		// TODO: Support interrupts
 		return true, 0, 0
 	}
@@ -2002,10 +2003,24 @@ func (clint *Clint) writeuint8(addr uint64, v uint8) {
 }
 
 type VirtioBlock struct {
-	data []uint64
+	data          []uint64
+	clock         uint64
+	notifications []uint64
 
-	guestpagesize uint32
-	status        uint32
+	guestpagesize          uint32
+	deviceFeaturesSelector uint32
+	deviceFeatures         uint64
+	guestFeatures          uint32
+	guestFeaturesSel       uint32
+
+	queueSel    uint32
+	queueNum    [1]uint32
+	queueAlign  [1]uint32
+	queuePFN    [1]uint32
+	queueNotify uint32
+
+	status          uint32
+	interruptStatus uint32
 }
 
 func NewVirtioBlock(byts []uint8) VirtioBlock {
@@ -2019,27 +2034,54 @@ func NewVirtioBlock(byts []uint8) VirtioBlock {
 }
 
 func (vb *VirtioBlock) step(clock uint64) {
-	// TODO
+	vb.clock = clock
+	for range vb.notifications {
+		panic("nyi - a notification is pending!")
+	}
 }
 
 func (vb *VirtioBlock) readuint8(addr uint64) (v uint8) {
 	defer func() { fmt.Printf("virtioblock[%x] => %x\n", addr, v) }()
 	switch addr {
-	case 0x10001000, 0x10001001, 0x10001002, 0x10001003:
+	case 0x10001000, 0x10001001, 0x10001002, 0x10001003: // MagicValue
 		sh := (addr - 0x10001000) * 8
 		return uint8(uint64(0x74726976) >> sh)
-	case 0x10001004, 0x10001005, 0x10001006, 0x10001007:
+	case 0x10001004, 0x10001005, 0x10001006, 0x10001007: // Version
 		sh := (addr - 0x10001004) * 8
 		return uint8(uint64(0x1) >> sh)
-	case 0x10001008, 0x10001009, 0x1000100a, 0x1000100b:
+	case 0x10001008, 0x10001009, 0x1000100a, 0x1000100b: // DeviceID
 		sh := (addr - 0x10001008) * 8
 		return uint8(uint64(0x2) >> sh)
-	case 0x1000100c, 0x1000100d, 0x1000100e, 0x1000100f:
+	case 0x1000100c, 0x1000100d, 0x1000100e, 0x1000100f: // VendorID
 		sh := (addr - 0x1000100c) * 8
 		return uint8(uint64(0x554d4551) >> sh)
-	case 0x10001070, 0x10001071, 0x10001072, 0x10001073:
+	case 0x10001010, 0x10001011, 0x10001012, 0x10001013: // HostFeatures
+		sh := (addr - 0x10001010) * 8
+		return uint8((vb.deviceFeatures >> (vb.deviceFeaturesSelector * 32)) >> sh)
+	case 0x10001034, 0x10001035, 0x10001036, 0x10001037: // QueueNumMax
+		sh := (addr - 0x10001034) * 8
+		maxQueueSize := 0x2000
+		return uint8(maxQueueSize >> sh)
+	case 0x10001040, 0x10001041, 0x10001042, 0x10001043: // QueuePFN
+		sh := (addr - 0x10001040) * 8
+		return uint8(vb.queuePFN[vb.queueSel] >> sh)
+	case 0x10001050, 0x10001051, 0x10001052, 0x10001053: // QueueNotify
+		sh := (addr - 0x10001050) * 8
+		ret := uint8(vb.queueNotify >> sh)
+		if addr == 0x10001053 {
+			vb.notifications = append(vb.notifications, vb.clock)
+		}
+		return ret
+	case 0x10001060, 0x10001061, 0x10001062, 0x10001063: // InterruptStatus
+		sh := (addr - 0x10001060) * 8
+		return uint8(vb.interruptStatus >> sh)
+	case 0x10001070, 0x10001071, 0x10001072, 0x10001073: // Status
 		sh := (addr - 0x10001070) * 8
 		return uint8(vb.status >> sh)
+	case 0x10001100, 0x10001101, 0x10001102, 0x10001103, 0x10001104,
+		0x10001105, 0x10001106, 0x10001107: // Capacity
+		sh := (addr - 0x10001100) * 8
+		return uint8(uint64(0x32000) >> sh) /// 104MB??
 	default:
 		panic("nyi - read from virtio block device")
 	}
@@ -2048,9 +2090,36 @@ func (vb *VirtioBlock) readuint8(addr uint64) (v uint8) {
 func (vb *VirtioBlock) writeuint8(addr uint64, v uint8) {
 	fmt.Printf("virtioblock[%x] <= %x\n", addr, v)
 	switch addr {
+	case 0x10001014, 0x10001015, 0x10001016, 0x10001017:
+		sh := (addr - 0x10001014) * 8
+		vb.deviceFeaturesSelector = vb.deviceFeaturesSelector&^(0xff<<sh) | uint32(v)<<sh
+	case 0x10001020, 0x10001021, 0x10001022, 0x10001023:
+		sh := (addr - 0x10001020) * 8
+		vb.guestFeatures = vb.guestFeatures&^(0xff<<sh) | uint32(v)<<sh
+	case 0x10001024, 0x10001025, 0x10001026, 0x10001027:
+		sh := (addr - 0x10001024) * 8
+		vb.guestFeaturesSel = vb.guestFeaturesSel&^(0xff<<sh) | uint32(v)<<sh
 	case 0x10001028, 0x10001029, 0x1000102a, 0x1000102b:
 		sh := (addr - 0x10001028) * 8
 		vb.guestpagesize = vb.guestpagesize&^(0xff<<sh) | uint32(v)<<sh
+	case 0x10001030, 0x10001031, 0x10001032, 0x10001033:
+		sh := (addr - 0x10001030) * 8
+		vb.queueSel = vb.queueSel&^(0xff<<sh) | uint32(v)<<sh
+		if addr == 0x10001033 && vb.queueSel != 0 {
+			panic("nyi - multi queue")
+		}
+	case 0x10001038, 0x10001039, 0x1000103a, 0x1000103b:
+		sh := (addr - 0x10001038) * 8
+		vb.queueNum[vb.queueSel] = vb.queueNum[vb.queueSel]&^(0xff<<sh) | uint32(v)<<sh
+	case 0x1000103c, 0x1000103d, 0x1000103e, 0x1000103f:
+		sh := (addr - 0x1000103c) * 8
+		vb.queueAlign[vb.queueSel] = vb.queueAlign[vb.queueSel]&^(0xff<<sh) | uint32(v)<<sh
+	case 0x10001040, 0x10001041, 0x10001042, 0x10001043:
+		sh := (addr - 0x10001040) * 8
+		vb.queuePFN[vb.queueSel] = vb.queuePFN[vb.queueSel]&^(0xff<<sh) | uint32(v)<<sh
+	case 0x10001050, 0x10001051, 0x10001052, 0x10001053:
+		sh := (addr - 0x10001050) * 8
+		vb.queueNotify = vb.queueNotify&^(0xff<<sh) | uint32(v)<<sh
 	case 0x10001070, 0x10001071, 0x10001072, 0x10001073:
 		sh := (addr - 0x10001070) * 8
 		vb.status = vb.status&^(0xff<<sh) | uint32(v)<<sh
