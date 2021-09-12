@@ -197,13 +197,28 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 
 func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
 	v := uint32(0)
-	for i := uint64(0); i < 4; i++ {
-		paddr, ok := cpu.virtualToPhysical(cpu.pc+i, Execute)
+	if cpu.pc&0xfff <= 0x1000-4 { // instruction is within a single page
+		paddr, ok := cpu.virtualToPhysical(cpu.pc, Execute)
 		if !ok {
 			return 0, false, InstructionPageFault
 		}
-		x := cpu.readphysical(paddr)
-		v |= uint32(x) << (i * 8)
+		// if paddr >= MEMORYBASE { // instruction in RAM
+		// 	v = cpu.readphysicaluint32(paddr)
+		// } else {
+		for i := uint64(0); i < 4; i++ {
+			x := cpu.readphysical(paddr + i)
+			v |= uint32(x) << (i * 8)
+		}
+		// }
+	} else { // instruction is across two pages
+		for i := uint64(0); i < 4; i++ {
+			paddr, ok := cpu.virtualToPhysical(cpu.pc+i, Execute)
+			if !ok {
+				return 0, false, InstructionPageFault
+			}
+			x := cpu.readphysical(paddr)
+			v |= uint32(x) << (i * 8)
+		}
 	}
 	return v, true, 0
 }
@@ -1334,8 +1349,15 @@ func (cpu *CPU) readphysical(addr uint64) uint8 {
 
 func (cpu *CPU) readphysicaluint64(addr uint64) uint64 {
 	val := uint64(0)
-	for i := uint64(0); i < 8; i++ {
-		val |= (uint64(cpu.readphysical(addr+i)) << (i * 8))
+	if addr >= MEMORYBASE { // Read directly from RAM
+		memaddr := addr - MEMORYBASE
+		for i := uint64(0); i < 8; i++ {
+			val |= uint64(cpu.mem[memaddr+i]) << (i * 8)
+		}
+	} else {
+		for i := uint64(0); i < 8; i++ {
+			val |= uint64(cpu.readphysical(addr)) << (i * 8)
+		}
 	}
 	return val
 }
@@ -1378,12 +1400,24 @@ func (cpu *CPU) writephysical(addr uint64, v byte) {
 
 func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
 	val := uint64(0)
-	for i := uint64(0); i < 8; i++ {
-		x, ok := cpu.readraw(addr + i)
+	if addr&0xfff <= 0x1000-4 { // instruction is within a single page
+		paddr, ok := cpu.virtualToPhysical(addr, Read)
 		if !ok {
 			return 0, false, 0
 		}
-		val |= uint64(x) << (i * 8)
+		for i := uint64(0); i < 8; i++ {
+			x := cpu.readphysical(paddr + i)
+			val |= uint64(x) << (i * 8)
+		}
+	} else { // instruction is across two pages
+		for i := uint64(0); i < 8; i++ {
+			paddr, ok := cpu.virtualToPhysical(addr+i, Execute)
+			if !ok {
+				return 0, false, 0
+			}
+			x := cpu.readphysical(paddr)
+			val |= uint64(x) << (i * 8)
+		}
 	}
 	return val, true, 0
 }
