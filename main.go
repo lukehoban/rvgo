@@ -59,9 +59,10 @@ const (
 	UCAUSE   = 0x042
 	UTVAL    = 0x043
 	UIP      = 0x044
-	CYCLE    = 0xC00
-	TIME     = 0xC01
-	INSTRET  = 0xC02
+
+	CYCLE   = 0xC00
+	TIME    = 0xC01
+	INSTRET = 0xC02
 )
 
 const (
@@ -275,15 +276,23 @@ func (cpu *CPU) interrupt(pc uint64) {
 		panic("nyi - handle MachineSoftwareInterrupt")
 	}
 	if minterrupt&MIP_MTIP != 0 {
-		panic("nyi - handle MachineTimerInterrupt")
+		traptaken := cpu.trap(MachineTimerInterrupt, cpu.pc, pc, true)
+		if traptaken {
+			cpu.writecsr(MIP, cpu.readcsr(MIP)&^MIP_MTIP)
+			cpu.wfi = false
+		}
 	}
 	if minterrupt&MIP_SEIP != 0 {
-		panic("nyi - handle SupervisorExternalInterrupt")
+		traptaken := cpu.trap(SupervisorExternalInterrupt, cpu.pc, pc, true)
+		if traptaken {
+			cpu.writecsr(MIP, cpu.readcsr(MIP)&^MIP_SEIP)
+			cpu.wfi = false
+		}
 	}
-	if minterrupt&MIP_MSIP != 0 {
+	if minterrupt&MIP_SSIP != 0 {
 		panic("nyi - handle SupervisorSoftwareInterrupt")
 	}
-	if minterrupt&MIP_MTIP != 0 {
+	if minterrupt&MIP_STIP != 0 {
 		panic("nyi - handle SupervisorTimerInterrupt")
 	}
 }
@@ -299,30 +308,89 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 
 	fromPriv := cpu.priv
 	var handlePriv Privilege
+	var status, ie uint64
+	var epcAddr, causeAddr, tvalAddr, tvecAddr uint16
 	if (mdeleg>>pos)&1 == 0 {
 		handlePriv = Machine
+		status = cpu.readcsr(MSTATUS)
+		ie = cpu.readcsr(MIE)
+		epcAddr, causeAddr, tvalAddr, tvecAddr = MEPC, MCAUSE, MTVAL, MTVEC
 	} else if (sdeleg>>pos)&1 == 0 {
 		handlePriv = Supervisor
+		status = cpu.readcsr(SSTATUS)
+		ie = cpu.readcsr(SIE)
+		epcAddr, causeAddr, tvalAddr, tvecAddr = SEPC, SCAUSE, STVAL, STVEC
 	} else {
 		handlePriv = User
+		status = cpu.readcsr(USTATUS)
+		ie = cpu.readcsr(UIE)
+		epcAddr, causeAddr, tvalAddr, tvecAddr = UEPC, UCAUSE, UTVAL, UTVEC
 	}
 
-	// TODO: Decision about whether to take trap
+	if isInterrupt {
+		if handlePriv < fromPriv {
+			return false
+		} else if handlePriv == fromPriv {
+			switch fromPriv {
+			case Machine:
+				if (status>>3)&1 == 0 {
+					return false
+				}
+			case Supervisor:
+				if (status>>1)&1 == 0 {
+					fmt.Printf("warning - supervisor interrupt not enabled?\n")
+					return false
+				}
+			case User:
+				if (status>>0)&1 == 0 {
+					return false
+				}
+			default:
+				panic("invalid privilege")
+			}
+		}
+		switch reason {
+		case UserSoftwareInterrupt:
+			if (ie>>0)&1 == 0 {
+				return false
+			}
+		case SupervisorSoftwareInterrupt:
+			if (ie>>1)&1 == 0 {
+				return false
+			}
+		case MachineSoftwareInterrupt:
+			if (ie>>3)&1 == 0 {
+				return false
+			}
+		case UserTimerInterrupt:
+			if (ie>>4)&1 == 0 {
+				return false
+			}
+		case SupervisorTimerInterrupt:
+			if (ie>>5)&1 == 0 {
+				return false
+			}
+		case MachineTimerInterrupt:
+			if (ie>>7)&1 == 0 {
+				return false
+			}
+		case UserExternalInterrupt:
+			if (ie>>8)&1 == 0 {
+				return false
+			}
+		case SupervisorExternalInterrupt:
+			if (ie>>9)&1 == 0 {
+				return false
+			}
+		case MachineExternalInterrupt:
+			if (ie>>11)&1 == 0 {
+				return false
+			}
+		}
+		fmt.Printf("handling interrupt from %d to %d @ %x -- %d\n", fromPriv, handlePriv, cpu.pc, cpu.count)
+	}
 
 	cpu.priv = handlePriv
-
-	var epcAddr, causeAddr, tvalAddr, tvecAddr uint16
-	switch cpu.priv {
-	case Machine:
-		epcAddr, causeAddr, tvalAddr, tvecAddr = MEPC, MCAUSE, MTVAL, MTVEC
-	case Supervisor:
-		epcAddr, causeAddr, tvalAddr, tvecAddr = SEPC, SCAUSE, STVAL, STVEC
-	case User:
-		epcAddr, causeAddr, tvalAddr, tvecAddr = UEPC, UCAUSE, UTVAL, UTVEC
-	default:
-		panic("invalid privilege")
-	}
-
 	cpu.writecsr(epcAddr, addr)
 	cpu.writecsr(causeAddr, uint64(reason))
 	cpu.writecsr(tvalAddr, trapaddr)
@@ -1201,7 +1269,7 @@ func (cpu *CPU) readcsr(csr uint16) uint64 {
 	case SIE:
 		return cpu.csr[MIE] & 0x222
 	case SIP:
-		return cpu.csr[SIP] & 0x22
+		return cpu.csr[MIP] & 0x222
 	case TIME:
 		return cpu.clint.mtime
 	}
@@ -2068,8 +2136,16 @@ func (clint *Clint) writeuint8(addr uint64, v uint8) {
 		clint.msip = clint.msip&^0x1 | uint32(v)&1
 	case 0x02000001, 0x02000002, 0x02000003:
 		// Hardwired to zero
+	case 0x02004000, 0x02004001, 0x02004002, 0x02004003,
+		0x02004004, 0x02004005, 0x02004006, 0x02004007:
+		sh := (addr - 0x02004000) * 8
+		clint.mtimecmp = clint.mtimecmp&^(0xff<<sh) | uint64(v)<<sh
+	case 0x0200bff8, 0x0200bff9, 0x0200bffa, 0x0200bffb,
+		0x0200bffc, 0x0200bffd, 0x0200bffe, 0x0200bfff:
+		sh := (addr - 0x0200bff8) * 8
+		clint.mtime = clint.mtime&^(0xff<<sh) | uint64(v)<<sh
 	default:
-		// fmt.Printf("warning: ignored clint[%x] <= %v\n", addr, v)
+		fmt.Printf("warning: ignored clint[%x] <= %v\n", addr, v)
 	}
 }
 
@@ -2110,6 +2186,8 @@ func (vb *VirtioBlock) step(clock uint64) {
 		vb.interruptStatus |= 0b1
 		fmt.Printf("warning: need to actually transfer data from disk to memory!\n")
 		vb.notifications = vb.notifications[1:]
+	} else {
+		vb.interruptStatus &= ^uint32(0b1)
 	}
 }
 
