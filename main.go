@@ -159,7 +159,7 @@ func (cpu *CPU) step() {
 	cpu.clint.step(cpu.count, &cpu.csr[MIP])
 	cpu.uart.step(cpu.count)
 	cpu.disk.step(cpu.count)
-	cpu.plic.step(cpu.count, cpu.uart.interrupting, &cpu.csr[MIP])
+	cpu.plic.step(cpu.count, cpu.uart.interrupting, cpu.disk.interruptStatus&0b1 == 1, &cpu.csr[MIP])
 	cpu.count++
 
 	cpu.interrupt(cpu.pc)
@@ -167,7 +167,7 @@ func (cpu *CPU) step() {
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	if cpu.wfi {
-		fmt.Printf("warning - waiting for interrupt")
+		fmt.Printf("warning - waiting for interrupt\n")
 		// TODO: Support interrupts
 		return true, 0, 0
 	}
@@ -1784,6 +1784,7 @@ const (
 )
 
 const (
+	DISK_IRQ uint32 = 1
 	UART_IRQ uint32 = 10
 )
 
@@ -1800,21 +1801,36 @@ func NewPlic() Plic {
 	return Plic{}
 }
 
-func (plic *Plic) step(clock uint64, uartip bool, mip *uint64) {
-	// TODO: Only handling UART so far
+func (plic *Plic) step(clock uint64, uartip, diskip bool, mip *uint64) {
+	// TOOD: Generalize to set of connected interrupt sources
 	if uartip { // Uart is interrupting
-		index := 10 >> 3
-		plic.ips[index] |= 1 << (10 & 7)
+		index := UART_IRQ >> 3
+		plic.ips[index] |= 1 << (UART_IRQ & 7)
+		plic.updateIRQ = true
+	}
+	if diskip { // Disk is interrupting
+		index := DISK_IRQ >> 3
+		plic.ips[index] |= 1 << (DISK_IRQ & 7)
 		plic.updateIRQ = true
 	}
 	if plic.updateIRQ {
-		uartip := (plic.ips[10>>3]>>(10&7))&1 == 1
-		uartpri := plic.priorities[10]
-		uartenabled := (plic.enabled>>10)&1 == 1
+		diskip := (plic.ips[DISK_IRQ>>3]>>(DISK_IRQ&7))&1 == 1
+		diskpri := plic.priorities[DISK_IRQ]
+		diskenabled := (plic.enabled>>DISK_IRQ)&1 == 1
+
+		uartip := (plic.ips[UART_IRQ>>3]>>(UART_IRQ&7))&1 == 1
+		uartpri := plic.priorities[UART_IRQ]
+		uartenabled := (plic.enabled>>UART_IRQ)&1 == 1
 
 		irq := uint32(0)
-		if uartip && uartenabled && uartpri > plic.threshold {
-			irq = 10
+		pri := uint32(0)
+		if diskip && diskenabled && diskpri > plic.threshold && diskpri > pri {
+			irq = DISK_IRQ
+			pri = diskpri
+		}
+		if uartip && uartenabled && uartpri > plic.threshold && uartpri > pri {
+			irq = UART_IRQ
+			pri = uartpri
 		}
 
 		plic.irq = irq
@@ -1853,13 +1869,13 @@ func (plic *Plic) writeuint8(addr uint64, v uint8) {
 		plic.priorities[index] = plic.priorities[index]&^(0xff<<pos) | uint32(v)<<pos
 		plic.updateIRQ = true
 	} else if addr >= 0x0c002080 && addr <= 0x0c002087 {
-		pos := 8 * (addr & 0x11)
+		pos := 8 * (addr & 0b11)
 		plic.enabled = plic.enabled & ^(0xff<<pos) | uint64(v)<<pos
 		if pos == 0 {
 			plic.updateIRQ = true
 		}
 	} else if addr >= 0x0c201000 && addr <= 0x0c201003 {
-		pos := 8 * (addr & 0x11)
+		pos := 8 * (addr & 0b11)
 		plic.threshold = plic.threshold & ^(0xff<<pos) | uint32(v)<<pos
 		if pos == 0 {
 			plic.updateIRQ = true
@@ -2090,8 +2106,10 @@ func NewVirtioBlock(byts []uint8) VirtioBlock {
 
 func (vb *VirtioBlock) step(clock uint64) {
 	vb.clock = clock
-	for range vb.notifications {
-		panic("nyi - a notification is pending!")
+	if len(vb.notifications) != 0 && vb.clock == vb.notifications[0]+500 {
+		vb.interruptStatus |= 0b1
+		fmt.Printf("warning: need to actually transfer data from disk to memory!\n")
+		vb.notifications = vb.notifications[1:]
 	}
 }
 
@@ -2122,11 +2140,7 @@ func (vb *VirtioBlock) readuint8(addr uint64) (v uint8) {
 		return uint8(vb.queuePFN[vb.queueSel] >> sh)
 	case 0x10001050, 0x10001051, 0x10001052, 0x10001053: // QueueNotify
 		sh := (addr - 0x10001050) * 8
-		ret := uint8(vb.queueNotify >> sh)
-		if addr == 0x10001053 {
-			vb.notifications = append(vb.notifications, vb.clock)
-		}
-		return ret
+		return uint8(vb.queueNotify >> sh)
 	case 0x10001060, 0x10001061, 0x10001062, 0x10001063: // InterruptStatus
 		sh := (addr - 0x10001060) * 8
 		return uint8(vb.interruptStatus >> sh)
@@ -2175,6 +2189,9 @@ func (vb *VirtioBlock) writeuint8(addr uint64, v uint8) {
 	case 0x10001050, 0x10001051, 0x10001052, 0x10001053:
 		sh := (addr - 0x10001050) * 8
 		vb.queueNotify = vb.queueNotify&^(0xff<<sh) | uint32(v)<<sh
+		if addr == 0x10001053 {
+			vb.notifications = append(vb.notifications, vb.clock)
+		}
 	case 0x10001070, 0x10001071, 0x10001072, 0x10001073:
 		sh := (addr - 0x10001070) * 8
 		vb.status = vb.status&^(0xff<<sh) | uint32(v)<<sh

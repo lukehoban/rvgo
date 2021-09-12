@@ -59,14 +59,10 @@ func TestLinux(t *testing.T) {
 		fmt.Printf("failed with: %v\n", err)
 		fmt.Printf("%0.4f MHz\n", float64(cpu.count*1000)/float64(end.UnixNano()-start.UnixNano()))
 
-		assert.GreaterOrEqual(t, cpu.count, uint64(98392937))
+		assert.GreaterOrEqual(t, cpu.count, uint64(98389429))
 	}()
 
 	for {
 		cpu.step()
-		if cpu.wfi {
-			// TODO: Support interrupts needed to make more progress
-			return
-		}
 	}
 }
