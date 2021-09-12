@@ -180,11 +180,14 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	addr := cpu.pc
 
 	if DEBUG {
-		var regs []string
-		for _, r := range cpu.x {
-			regs = append(regs, fmt.Sprintf("%x", uint64(r)))
+		if cpu.count > 16043500 {
+			// if cpu.count%100 == 0 {
+			var regs []string
+			for _, r := range cpu.x {
+				regs = append(regs, fmt.Sprintf("%x", uint64(r)))
+			}
+			fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
 		}
-		fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
 	}
 
 	if instr&0b11 == 0b11 {
@@ -230,37 +233,37 @@ func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
 	return v, true, 0
 }
 
-type TrapReason int64
+type TrapReason uint64
 
 const (
-	UserSoftwareInterrupt       TrapReason = 0x800000000000000
-	SupervisorSoftwareInterrupt TrapReason = 0x800000000000001
-	HypervisorSoftwareInterrupt TrapReason = 0x800000000000002
-	MachineSoftwareInterrupt    TrapReason = 0x800000000000003
-	UserTimerInterrupt          TrapReason = 0x800000000000004
-	SupervisorTimerInterrupt    TrapReason = 0x800000000000005
-	HypervisorTimerInterrupt    TrapReason = 0x800000000000006
-	MachineTimerInterrupt       TrapReason = 0x800000000000007
-	UserExternalInterrupt       TrapReason = 0x800000000000008
-	SupervisorExternalInterrupt TrapReason = 0x800000000000009
-	HypervisorExternalInterrupt TrapReason = 0x80000000000000A
-	MachineExternalInterrupt    TrapReason = 0x80000000000000B
+	UserSoftwareInterrupt       TrapReason = 0x8000000000000000
+	SupervisorSoftwareInterrupt TrapReason = 0x8000000000000001
+	HypervisorSoftwareInterrupt TrapReason = 0x8000000000000002
+	MachineSoftwareInterrupt    TrapReason = 0x8000000000000003
+	UserTimerInterrupt          TrapReason = 0x8000000000000004
+	SupervisorTimerInterrupt    TrapReason = 0x8000000000000005
+	HypervisorTimerInterrupt    TrapReason = 0x8000000000000006
+	MachineTimerInterrupt       TrapReason = 0x8000000000000007
+	UserExternalInterrupt       TrapReason = 0x8000000000000008
+	SupervisorExternalInterrupt TrapReason = 0x8000000000000009
+	HypervisorExternalInterrupt TrapReason = 0x800000000000000A
+	MachineExternalInterrupt    TrapReason = 0x800000000000000B
 
-	InstructionAddressMisaligned TrapReason = 0x000000000000000
-	InstructionAccessFault       TrapReason = 0x000000000000001
-	IllegalInstruction           TrapReason = 0x000000000000002
-	Breakpoint                   TrapReason = 0x000000000000003
-	LoadAddressMisaligned        TrapReason = 0x000000000000004
-	LoadAccessFault              TrapReason = 0x000000000000005
-	StoreAddressMisaligned       TrapReason = 0x000000000000006
-	StoreAccessFault             TrapReason = 0x000000000000007
-	EnvironmentCallFromUMode     TrapReason = 0x000000000000008
-	EnvironmentCallFromSMode     TrapReason = 0x000000000000009
-	EnvironmentCallFromHMode     TrapReason = 0x00000000000000A
-	EnvironmentCallFromMMode     TrapReason = 0x00000000000000B
-	InstructionPageFault         TrapReason = 0x00000000000000C
-	LoadPageFault                TrapReason = 0x00000000000000D
-	StorePageFault               TrapReason = 0x00000000000000F
+	InstructionAddressMisaligned TrapReason = 0x0000000000000000
+	InstructionAccessFault       TrapReason = 0x0000000000000001
+	IllegalInstruction           TrapReason = 0x0000000000000002
+	Breakpoint                   TrapReason = 0x0000000000000003
+	LoadAddressMisaligned        TrapReason = 0x0000000000000004
+	LoadAccessFault              TrapReason = 0x0000000000000005
+	StoreAddressMisaligned       TrapReason = 0x0000000000000006
+	StoreAccessFault             TrapReason = 0x0000000000000007
+	EnvironmentCallFromUMode     TrapReason = 0x0000000000000008
+	EnvironmentCallFromSMode     TrapReason = 0x0000000000000009
+	EnvironmentCallFromHMode     TrapReason = 0x000000000000000A
+	EnvironmentCallFromMMode     TrapReason = 0x000000000000000B
+	InstructionPageFault         TrapReason = 0x000000000000000C
+	LoadPageFault                TrapReason = 0x000000000000000D
+	StorePageFault               TrapReason = 0x000000000000000F
 )
 
 func (cpu *CPU) exception(reason TrapReason, trapaddr uint64, instructionaddr uint64) {

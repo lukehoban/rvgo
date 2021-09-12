@@ -4,3 +4,4 @@ linux/fw_payload.dump
 coverage.*
 rvgo.test
 cpu.out
+trace.diff
