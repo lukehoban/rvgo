@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"unsafe"
 )
 
 var MEMORYBASE uint64 = 0x80000000
@@ -102,14 +103,16 @@ const (
 var dtb []byte
 
 type CPU struct {
-	pc   uint64
-	mem  []byte
-	x    [32]int64
-	f    [32]float64
-	csr  [4096]uint64
-	priv Privilege
-	mode AddressMode
-	wfi  bool
+	pc    uint64
+	mem   []byte
+	mem32 []uint32
+	mem64 []uint64
+	x     [32]int64
+	f     [32]float64
+	csr   [4096]uint64
+	priv  Privilege
+	mode  AddressMode
+	wfi   bool
 
 	reservation    uint64
 	reservationSet bool
@@ -126,6 +129,8 @@ func NewCPU(mem []byte, pc uint64, disk []byte) CPU {
 	cpu := CPU{
 		pc:    pc,
 		mem:   mem,
+		mem32: *((*[]uint32)(unsafe.Pointer(&mem))),
+		mem64: *((*[]uint64)(unsafe.Pointer(&mem))),
 		priv:  Machine,
 		uart:  NewUart(),
 		plic:  NewPlic(),
@@ -202,14 +207,15 @@ func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
 		if !ok {
 			return 0, false, InstructionPageFault
 		}
-		// if paddr >= MEMORYBASE { // instruction in RAM
-		// 	v = cpu.readphysicaluint32(paddr)
-		// } else {
-		for i := uint64(0); i < 4; i++ {
-			x := cpu.readphysical(paddr + i)
-			v |= uint32(x) << (i * 8)
+		if paddr >= MEMORYBASE && paddr%4 == 0 {
+			memaddr := paddr - MEMORYBASE
+			v = uint32(cpu.mem32[memaddr/4])
+		} else {
+			for i := uint64(0); i < 4; i++ {
+				x := cpu.readphysical(paddr + i)
+				v |= uint32(x) << (i * 8)
+			}
 		}
-		// }
 	} else { // instruction is across two pages
 		for i := uint64(0); i < 4; i++ {
 			paddr, ok := cpu.virtualToPhysical(cpu.pc+i, Execute)
@@ -1349,11 +1355,9 @@ func (cpu *CPU) readphysical(addr uint64) uint8 {
 
 func (cpu *CPU) readphysicaluint64(addr uint64) uint64 {
 	val := uint64(0)
-	if addr >= MEMORYBASE { // Read directly from RAM
+	if addr >= MEMORYBASE && addr%8 == 0 { // Read directly from RAM
 		memaddr := addr - MEMORYBASE
-		for i := uint64(0); i < 8; i++ {
-			val |= uint64(cpu.mem[memaddr+i]) << (i * 8)
-		}
+		val = cpu.mem64[memaddr/8]
 	} else {
 		for i := uint64(0); i < 8; i++ {
 			val |= uint64(cpu.readphysical(addr)) << (i * 8)
@@ -1455,13 +1459,30 @@ func (cpu *CPU) readuint8(addr uint64) (uint8, bool, TrapReason) {
 }
 
 func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, TrapReason) {
-	for i := uint64(0); i < 8; i++ {
-		ok := cpu.writeraw(addr+i, byte(val>>(i*8)))
+	if addr&0xfff <= 0x1000-8 { // uint64 is within a single page
+		paddr, ok := cpu.virtualToPhysical(addr, Write)
 		if !ok {
 			return false, 0
 		}
+		if paddr >= MEMORYBASE {
+			memaddr := paddr - MEMORYBASE
+			cpu.mem64[memaddr/8] = val
+		} else {
+			for i := uint64(0); i < 8; i++ {
+				cpu.writephysical(paddr+i, byte(val>>(i*8)))
+			}
+		}
+		return true, 0
+	} else { // uint64 is across two pages
+		for i := uint64(0); i < 8; i++ {
+			paddr, ok := cpu.virtualToPhysical(addr+i, Write)
+			if !ok {
+				return false, 0
+			}
+			cpu.writephysical(paddr, byte(val>>(i*8)))
+		}
+		return true, 0
 	}
-	return true, 0
 }
 
 func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, TrapReason) {
