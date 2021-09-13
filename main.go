@@ -296,11 +296,16 @@ func (cpu *CPU) interrupt(pc uint64) {
 		panic("nyi - handle SupervisorSoftwareInterrupt")
 	}
 	if minterrupt&MIP_STIP != 0 {
-		panic("nyi - handle SupervisorTimerInterrupt")
+		traptaken := cpu.trap(SupervisorTimerInterrupt, cpu.pc, pc, true)
+		if traptaken {
+			cpu.writecsr(MIP, cpu.readcsr(MIP)&^MIP_STIP)
+			cpu.wfi = false
+		}
 	}
 }
 
 func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool) bool {
+	// fmt.Fprintf(debugFile, "Handling trap: %v, %08x, %08x\n", reason, trapaddr, addr)
 	var mdeleg, sdeleg uint64
 	if isInterrupt {
 		mdeleg, sdeleg = cpu.readcsr(MIDELEG), cpu.readcsr(SIDELEG)
@@ -341,7 +346,6 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 				}
 			case Supervisor:
 				if (status>>1)&1 == 0 {
-					fmt.Printf("warning - supervisor interrupt not enabled?\n")
 					return false
 				}
 			case User:
@@ -390,7 +394,6 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 				return false
 			}
 		}
-		fmt.Printf("handling interrupt from %d to %d @ %x -- %d\n", fromPriv, handlePriv, cpu.pc, cpu.count)
 	}
 
 	cpu.priv = handlePriv
@@ -864,13 +867,27 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0b000000000010: // URET
 				panic("nyi - URET")
 			case 0b000100000010: // SRET
-				panic("nyi - SRET")
+				cpu.pc = cpu.readcsr(SEPC)
+				status := cpu.readcsr(SSTATUS)
+				cpu.priv = Privilege((status >> 8) & 0b1)
+				spie := (status >> 5) & 0b1
+				var mpriv uint64
+				if cpu.priv == Machine {
+					mpriv = (status >> 17) & 0b1
+				}
+				status = status&^0x20122 | mpriv<<17 | spie<<1 | 1<<5
+				cpu.writecsr(SSTATUS, status)
 			case 0b001100000010: // MRET
 				cpu.pc = cpu.readcsr(MEPC)
-				cpu.priv = cpu.getMPP()
-				cpu.setMIE(cpu.getMPIE())
-				cpu.setMPIE(1)
-				cpu.setMPP(0)
+				status := cpu.readcsr(MSTATUS)
+				cpu.priv = Privilege((status >> 11) & 0b11)
+				mpie := (status >> 7) & 0b1
+				var mpriv uint64
+				if cpu.priv == Machine {
+					mpriv = (status >> 17) & 0b1
+				}
+				status = status&^0x21888 | mpriv<<17 | mpie<<3 | 1<<7
+				cpu.writecsr(SSTATUS, status)
 			case 0b000100000101: // WFI
 				cpu.wfi = true
 			default:
@@ -1239,26 +1256,6 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		panic(fmt.Sprintf("nyi - opcode %x", instr&0x7f))
 	}
 	return true, 0, 0
-}
-
-func (cpu *CPU) getMPP() Privilege {
-	return Privilege((cpu.readcsr(MSTATUS) >> 11) & 0b11)
-}
-
-func (cpu *CPU) setMPP(v uint64) {
-	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b11)<<11)
-}
-
-func (cpu *CPU) setMIE(v uint64) {
-	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b1)<<3)
-}
-
-func (cpu *CPU) getMPIE() uint64 {
-	return (cpu.csr[MSTATUS] >> 7) & 0b1
-}
-
-func (cpu *CPU) setMPIE(v uint64) {
-	cpu.writecsr(MSTATUS, cpu.readcsr(MSTATUS)|(v&0b1)<<7)
 }
 
 func (cpu *CPU) readcsr(csr uint16) uint64 {
@@ -2119,10 +2116,10 @@ func NewClint() Clint {
 func (clint *Clint) step(clock uint64, mip *uint64) {
 	clint.mtime++
 	if clint.msip&1 != 0 {
-		*mip = MIP_MSIP
+		*mip |= MIP_MSIP
 	}
 	if clint.mtimecmp > 0 && clint.mtime >= clint.mtimecmp {
-		*mip = MIP_MTIP
+		*mip |= MIP_MTIP
 	}
 }
 
