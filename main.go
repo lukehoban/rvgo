@@ -136,8 +136,9 @@ func NewCPU(mem []byte, pc uint64, disk []byte) CPU {
 		uart:  NewUart(),
 		plic:  NewPlic(),
 		clint: NewClint(),
-		disk:  NewVirtioBlock(disk),
 	}
+	cpu.disk = NewVirtioBlock(disk, &cpu)
+
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
 	cpu.writecsr(MISA, 0x800000008014312f)
@@ -168,7 +169,7 @@ func (cpu *CPU) step() {
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	if cpu.wfi {
-		fmt.Printf("warning - waiting for interrupt\n")
+		fmt.Printf("warning - waiting for interrupt pc=%08x mip=%08x mie=%08x\n", cpu.pc, cpu.readcsr(MIP), cpu.readcsr(MIE))
 		// TODO: Support interrupts
 		return true, 0, 0
 	}
@@ -1863,6 +1864,8 @@ type Plic struct {
 	ips        [1024]uint8
 	priorities [1024]uint32
 	updateIRQ  bool
+
+	lastdiskip bool
 }
 
 func NewPlic() Plic {
@@ -1871,10 +1874,13 @@ func NewPlic() Plic {
 
 func (plic *Plic) step(clock uint64, uartip, diskip bool, mip *uint64) {
 	// TOOD: Generalize to set of connected interrupt sources
-	if uartip { // Uart is interrupting
-		index := UART_IRQ >> 3
-		plic.ips[index] |= 1 << (UART_IRQ & 7)
-		plic.updateIRQ = true
+	if diskip != plic.lastdiskip { // Track edge of ip signal and trigger on raising edge only
+		if uartip { // Uart is interrupting
+			index := UART_IRQ >> 3
+			plic.ips[index] |= 1 << (UART_IRQ & 7)
+			plic.updateIRQ = true
+		}
+		plic.lastdiskip = diskip
 	}
 	if diskip { // Disk is interrupting
 		index := DISK_IRQ >> 3
@@ -2155,6 +2161,7 @@ type VirtioBlock struct {
 	data          []uint64
 	clock         uint64
 	notifications []uint64
+	usedRingIndex uint16
 
 	guestpagesize          uint32
 	deviceFeaturesSelector uint32
@@ -2170,14 +2177,17 @@ type VirtioBlock struct {
 
 	status          uint32
 	interruptStatus uint32
+
+	cpu *CPU
 }
 
-func NewVirtioBlock(byts []uint8) VirtioBlock {
+func NewVirtioBlock(byts []uint8, cpu *CPU) VirtioBlock {
 	data := make([]uint64, (len(byts)+7)/8)
 	for i := range data {
 		data[i>>3] |= uint64(byts[i]) << ((i % 8) * 8)
 	}
 	return VirtioBlock{
+		cpu:  cpu,
 		data: data,
 	}
 }
@@ -2186,15 +2196,85 @@ func (vb *VirtioBlock) step(clock uint64) {
 	vb.clock = clock
 	if len(vb.notifications) != 0 && vb.clock == vb.notifications[0]+500 {
 		vb.interruptStatus |= 0b1
-		fmt.Printf("warning: need to actually transfer data from disk to memory!\n")
+		vb.handleNotification()
 		vb.notifications = vb.notifications[1:]
-	} else {
-		vb.interruptStatus &= ^uint32(0b1)
 	}
 }
 
+func (vb *VirtioBlock) handleNotification() {
+	baseDescAddr := uint64(vb.queuePFN[vb.queueSel]) * uint64(vb.guestpagesize)
+	queueSize := uint64(vb.queueNum[vb.queueSel])
+	baseAvailAddr := baseDescAddr + queueSize*16
+	align := uint64(vb.queueAlign[vb.queueSel])
+	baseUsedAddr := ((baseAvailAddr + 4 + queueSize*2 + align - 1) / align) * align
+
+	descIndexAddr := baseAvailAddr + 4 + (uint64(vb.usedRingIndex)%queueSize)*2
+	descHeadIndex := (uint64(vb.cpu.readphysical(descIndexAddr)) + uint64(vb.cpu.readphysical(descIndexAddr+1))<<8) % queueSize
+
+	var blkSector, descNum, next uint64
+	for {
+		descElemAddr := baseDescAddr + 16*next
+		descAddr := vb.cpu.readphysicaluint64(descElemAddr)
+		descLenFlagsNext := vb.cpu.readphysicaluint64(descElemAddr + 8)
+		descLen := uint64(uint32(descLenFlagsNext))
+		descFlags := uint16(descLenFlagsNext >> 32)
+		descNext := uint16(descLenFlagsNext >> 48)
+		next = uint64(descNext) % queueSize
+
+		switch descNum {
+		case 0:
+			blkSector = vb.cpu.readphysicaluint64(descAddr + 8)
+		case 1:
+			if descFlags&0x2 == 0 { // Write
+				for i := uint64(0); i < descLen; i++ {
+					v := vb.cpu.readphysical(descAddr + i)
+					diskAddr := blkSector*512 + i
+					diskIndex := diskAddr >> 3
+					diskPos := (diskAddr % 8) * 8
+					vb.data[diskIndex] = vb.data[diskIndex]&^(0xff<<diskPos) | uint64(v)<<diskPos
+				}
+			} else { // Read
+				for i := uint64(0); i < descLen; i++ {
+					diskAddr := blkSector*512 + i
+					diskIndex := diskAddr >> 3
+					diskPos := (diskAddr % 8) * 8
+					v := uint8(vb.data[diskIndex] >> diskPos)
+					vb.cpu.writephysical(descAddr+i, v)
+				}
+			}
+		case 2:
+			if descFlags&0x2 == 0 {
+				panic("Third descriptor should be write.")
+			}
+			if descLen != 1 {
+				panic("Third descriptor length should be one.")
+			}
+			vb.cpu.writephysical(descAddr, 0)
+		default:
+		}
+
+		descNum++
+		if descFlags&0b1 == 0 {
+			break
+		}
+	}
+
+	if descNum != 3 {
+		panic("expected 3 element descriptor chain")
+	}
+
+	vb.cpu.writephysical(baseUsedAddr+4+(uint64(vb.usedRingIndex)%queueSize)*8, uint8(descHeadIndex))
+	vb.cpu.writephysical(baseUsedAddr+5+(uint64(vb.usedRingIndex)%queueSize)*8, uint8(descHeadIndex>>8))
+	vb.cpu.writephysical(baseUsedAddr+6+(uint64(vb.usedRingIndex)%queueSize)*8, uint8(descHeadIndex>>16))
+	vb.cpu.writephysical(baseUsedAddr+7+(uint64(vb.usedRingIndex)%queueSize)*8, uint8(descHeadIndex>>24))
+
+	vb.usedRingIndex++
+	vb.cpu.writephysical(baseUsedAddr+2, uint8(vb.usedRingIndex))
+	vb.cpu.writephysical(baseUsedAddr+3, uint8(vb.usedRingIndex>>8))
+}
+
 func (vb *VirtioBlock) readuint8(addr uint64) (v uint8) {
-	defer func() { fmt.Printf("virtioblock[%x] => %x\n", addr, v) }()
+	// defer func() { fmt.Printf("virtioblock[%x] => %x\n", addr, v) }()
 	switch addr {
 	case 0x10001000, 0x10001001, 0x10001002, 0x10001003: // MagicValue
 		sh := (addr - 0x10001000) * 8
@@ -2237,7 +2317,7 @@ func (vb *VirtioBlock) readuint8(addr uint64) (v uint8) {
 }
 
 func (vb *VirtioBlock) writeuint8(addr uint64, v uint8) {
-	fmt.Printf("virtioblock[%x] <= %x\n", addr, v)
+	// fmt.Printf("virtioblock[%x] <= %x\n", addr, v)
 	switch addr {
 	case 0x10001014, 0x10001015, 0x10001016, 0x10001017:
 		sh := (addr - 0x10001014) * 8

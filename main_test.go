@@ -49,7 +49,9 @@ func TestLinux(t *testing.T) {
 	mem := make([]byte, 0x10000000)
 	entry, err := loadElf(filepath.Join("linux", "fw_payload.elf"), mem)
 	assert.NoError(t, err)
-	cpu := NewCPU(mem, entry, nil) // TODO: Mount a root filesystem
+	rootfs, err := ioutil.ReadFile(filepath.Join("linux", "rootfs.img"))
+	assert.NoError(t, err)
+	cpu := NewCPU(mem, entry, rootfs) // TODO: Mount a root filesystem
 	start := time.Now()
 
 	defer func() {
@@ -59,13 +61,10 @@ func TestLinux(t *testing.T) {
 		fmt.Printf("failed with: %v\n", err)
 		fmt.Printf("%0.4f MHz\n", float64(cpu.count*1000)/float64(end.UnixNano()-start.UnixNano()))
 
-		assert.GreaterOrEqual(t, cpu.count, uint64(98389429))
+		assert.GreaterOrEqual(t, cpu.count, uint64(125927953))
 	}()
 
 	for {
 		cpu.step()
-		if cpu.count >= 100000429 {
-			return
-		}
 	}
 }
