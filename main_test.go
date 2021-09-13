@@ -64,5 +64,8 @@ func TestLinux(t *testing.T) {
 
 	for {
 		cpu.step()
+		if cpu.count >= 100000429 {
+			return
+		}
 	}
 }
