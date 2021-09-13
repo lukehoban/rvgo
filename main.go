@@ -1949,7 +1949,9 @@ func (plic *Plic) writeuint8(addr uint64, v uint8) {
 			plic.updateIRQ = true
 		}
 	} else if addr == 0x0c201004 {
-		panic("nyi - write to plic claim")
+		index := v >> 3
+		plic.ips[index] &= ^(1 << v)
+		plic.updateIRQ = true
 	} else {
 		// fmt.Printf("warning: ignored plic[%x] <= %x\n", addr, v)
 	}
@@ -2270,6 +2272,12 @@ func (vb *VirtioBlock) writeuint8(addr uint64, v uint8) {
 		if addr == 0x10001053 {
 			vb.notifications = append(vb.notifications, vb.clock)
 		}
+	case 0x10001064:
+		if v&0b1 == 1 {
+			vb.interruptStatus &= ^uint32(0b1)
+		}
+	case 0x10001065, 0x10001066, 0x10001067:
+		// do nothing
 	case 0x10001070, 0x10001071, 0x10001072, 0x10001073:
 		sh := (addr - 0x10001070) * 8
 		vb.status = vb.status&^(0xff<<sh) | uint32(v)<<sh
