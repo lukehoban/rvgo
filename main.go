@@ -1308,17 +1308,29 @@ func (cpu *CPU) writecsr(csr uint16, v uint64) {
 
 func (cpu *CPU) virtualToPhysical(vaddr uint64, access Access) (uint64, bool) {
 	switch cpu.mode {
-	case 0:
+	case None:
 		return vaddr, true
-	case 8:
-		rootppn := cpu.readcsr(SATP) & 0xfffffffffff
+	case SV39:
 		switch cpu.priv {
 		case Machine:
-			if (cpu.readcsr(MSTATUS)>>17)&1 == 0 {
+			mstatus := cpu.readcsr(MSTATUS)
+			if access == Execute {
 				return vaddr, true
 			}
-			panic(fmt.Sprintf("nyi - MSTATUS>>17==1 machine mode addressing mode %d addr %x", cpu.mode, vaddr))
+			if (mstatus>>17)&1 == 0 {
+				return vaddr, true
+			}
+			priv := Privilege((mstatus >> 9) & 3)
+			if priv == Machine {
+				return vaddr, true
+			}
+			currentPriv := cpu.priv
+			cpu.priv = priv
+			v, ok := cpu.virtualToPhysical(vaddr, access)
+			cpu.priv = currentPriv
+			return v, ok
 		case User, Supervisor:
+			rootppn := cpu.readcsr(SATP) & 0xfffffffffff
 			vpns := []uint64{(vaddr >> 12) & 0x1ff, (vaddr >> 21) & 0x1ff, (vaddr >> 30) & 0x1ff}
 			paddr, ok := cpu.walkPageTables(vaddr, 3-1, rootppn, vpns, access)
 			if !ok {
@@ -1596,8 +1608,11 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			} else {
 				panic("reserved")
 			}
-		case 0b001:
-			panic("nyi - C.FLD/C.LQ")
+		case 0b001: // C.FLD = fld rd+8, offset(rs1+8)
+			rs1 := (instr >> 7) & 0x7
+			rd := (instr >> 2) & 0x7
+			offset := (instr>>7)&0x38 | (instr<<1)&0xc0
+			return offset<<20 | (rs1+8)<<15 | 3<<12 | (rd+8)<<7 | 0x7
 		case 0b010: // C.LW = lw rd+8, offset(rs1+8)
 			rs1 := (instr >> 7) & 0x7
 			rd := (instr >> 2) & 0x7
@@ -1875,16 +1890,16 @@ func NewPlic() Plic {
 func (plic *Plic) step(clock uint64, uartip, diskip bool, mip *uint64) {
 	// TOOD: Generalize to set of connected interrupt sources
 	if diskip != plic.lastdiskip { // Track edge of ip signal and trigger on raising edge only
-		if uartip { // Uart is interrupting
-			index := UART_IRQ >> 3
-			plic.ips[index] |= 1 << (UART_IRQ & 7)
+		if diskip { // Disk is interrupting
+			index := DISK_IRQ >> 3
+			plic.ips[index] |= 1 << (DISK_IRQ & 7)
 			plic.updateIRQ = true
 		}
 		plic.lastdiskip = diskip
 	}
-	if diskip { // Disk is interrupting
-		index := DISK_IRQ >> 3
-		plic.ips[index] |= 1 << (DISK_IRQ & 7)
+	if uartip { // Uart is interrupting
+		index := UART_IRQ >> 3
+		plic.ips[index] |= 1 << (UART_IRQ & 7)
 		plic.updateIRQ = true
 	}
 	if plic.updateIRQ {
@@ -1920,7 +1935,7 @@ func (plic *Plic) readuint8(addr uint64) (v uint8) {
 	// defer func() { fmt.Printf("plic[%x] => %x\n", addr, v) }()
 	if addr >= 0x0c000000 && addr <= 0x0c000fff {
 		panic("nyi - read from  plicpriorities")
-	} else if addr >= 0x001000 && addr <= 0xc00107f {
+	} else if addr >= 0x0c001000 && addr <= 0x0c00107f {
 		panic("nyi - read from  plic ips")
 	} else if addr >= 0x0c002080 && addr <= 0x0c002087 {
 		return uint8(plic.enabled >> ((addr - 0x0c002080) * 8))
@@ -1943,7 +1958,7 @@ func (plic *Plic) writeuint8(addr uint64, v uint8) {
 		plic.priorities[index] = plic.priorities[index]&^(0xff<<pos) | uint32(v)<<pos
 		plic.updateIRQ = true
 	} else if addr >= 0x0c002080 && addr <= 0x0c002087 {
-		pos := 8 * (addr & 0b11)
+		pos := 8 * (addr & 0b111)
 		plic.enabled = plic.enabled & ^(0xff<<pos) | uint64(v)<<pos
 		if pos == 0 {
 			plic.updateIRQ = true
