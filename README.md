@@ -58,52 +58,80 @@ PMP1    : 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
 [    0.000000] riscv_timer_init_dt: Registering clocksource cpuid [0] hartid [0]
 [    0.000000] clocksource: riscv_clocksource: mask: 0xffffffffffffffff max_cycles: 0x24e6a1710, max_idle_ns: 440795202120 ns
 [    0.000330] sched_clock: 64 bits at 10MHz, resolution 100ns, wraps every 4398046511100ns
-[    0.005733] Console: colour dummy device 80x25
-[    0.054505] printk: console [tty0] enabled
-[    0.057646] Calibrating delay loop (skipped), value calculated using timer frequency.. 20.00 BogoMIPS (lpj=40000)
-[    0.063139] pid_max: default: 32768 minimum: 301
-[    0.071334] Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
-[    0.076516] Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
-[    0.128914] rcu: Hierarchical SRCU implementation.
-[    0.139084] smp: Bringing up secondary CPUs ...
-[    0.141857] smp: Brought up 1 node, 1 CPU
-[    0.152663] devtmpfs: initialized
-[    0.185429] random: get_random_u32 called from bucket_table_alloc.isra.0+0x4e/0x154 with crng_init=0
-[    0.198158] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
-[    0.203525] futex hash table entries: 256 (order: 2, 16384 bytes, linear)
-[    0.218507] NET: Registered protocol family 16
-[    0.819084] vgaarb: loaded
-[    0.835008] SCSI subsystem initialized
-[    0.849671] usbcore: registered new interface driver usbfs
-[    0.854262] usbcore: registered new interface driver hub
-[    0.858401] usbcore: registered new device driver usb
-[    0.887523] clocksource: Switched to clocksource riscv_clocksource
-[    1.130384] NET: Registered protocol family 2
-[    1.158470] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
-[    1.164132] TCP established hash table entries: 1024 (order: 1, 8192 bytes, linear)
-[    1.170471] TCP bind hash table entries: 1024 (order: 2, 16384 bytes, linear)
-[    1.174694] TCP: Hash tables configured (established 1024 bind 1024)
-[    1.179795] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
-[    1.183661] UDP-Lite hash table entries: 256 (order: 1, 8192 bytes, linear)
-[    1.191174] NET: Registered protocol family 1
-[    1.208199] RPC: Registered named UNIX socket transport module.
-[    1.211010] RPC: Registered udp transport module.
-[    1.213721] RPC: Registered tcp transport module.
-[    1.216459] RPC: Registered tcp NFSv4.1 backchannel transport module.
-[    1.219364] PCI: CLS 0 bytes, default 64
-[    1.245006] workingset: timestamp_bits=62 max_order=14 bucket_order=0
-[    1.695484] NFS: Registering the id_resolver key type
-[    1.698626] Key type id_resolver registered
-[    1.701292] Key type id_legacy registered
-[    1.704267] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
-[    1.711091] 9p: Installing v9fs 9p2000 file system support
-[    1.727843] NET: Registered protocol family 38
-[    1.731472] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 253)
-[    1.736390] io scheduler mq-deadline registered
-[    1.739089] io scheduler kyber registered
-[    3.224473] Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
-[    3.269948] 10000000.uart: ttyS0 at MMIO 0x10000000 (irq = 10, base_baud = 230400) is a 16550A
-[    7.680894] printk: console [ttyS0] enabled
-[    7.759049] [drm] radeon kernel modesetting enabled.
-[    8.017307] loop: module loaded
+[    0.006350] Console: colour dummy device 80x25
+[    0.061158] printk: console [tty0] enabled
+[    0.064907] Calibrating delay loop (skipped), value calculated using timer frequency.. 20.00 BogoMIPS (lpj=40000)
+[    0.071021] pid_max: default: 32768 minimum: 301
+[    0.080459] Mount-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.086266] Mountpoint-cache hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.147251] rcu: Hierarchical SRCU implementation.
+[    0.159109] smp: Bringing up secondary CPUs ...
+[    0.162698] smp: Brought up 1 node, 1 CPU
+[    0.176101] devtmpfs: initialized
+[    0.214369] random: get_random_u32 called from bucket_table_alloc.isra.0+0x4e/0x154 with crng_init=0
+[    0.229596] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.235644] futex hash table entries: 256 (order: 2, 16384 bytes, linear)
+[    0.252619] NET: Registered protocol family 16
+[    1.004435] vgaarb: loaded
+[    1.023176] SCSI subsystem initialized
+[    1.040987] usbcore: registered new interface driver usbfs
+[    1.046258] usbcore: registered new interface driver hub
+[    1.051057] usbcore: registered new device driver usb
+[    1.085403] clocksource: Switched to clocksource riscv_clocksource
+[    1.368901] NET: Registered protocol family 2
+[    1.401444] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    1.407649] TCP established hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    1.414561] TCP bind hash table entries: 1024 (order: 2, 16384 bytes, linear)
+[    1.419342] TCP: Hash tables configured (established 1024 bind 1024)
+[    1.425572] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    1.430003] UDP-Lite hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    1.438657] NET: Registered protocol family 1
+[    1.457454] RPC: Registered named UNIX socket transport module.
+[    1.460850] RPC: Registered udp transport module.
+[    1.463561] RPC: Registered tcp transport module.
+[    1.466885] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    1.470375] PCI: CLS 0 bytes, default 64
+[    1.503201] workingset: timestamp_bits=62 max_order=14 bucket_order=0
+[    2.030752] NFS: Registering the id_resolver key type
+[    2.034478] Key type id_resolver registered
+[    2.037728] Key type id_legacy registered
+[    2.041286] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
+[    2.049276] 9p: Installing v9fs 9p2000 file system support
+[    2.068910] NET: Registered protocol family 38
+[    2.073114] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 253)
+[    2.078607] io scheduler mq-deadline registered
+[    2.081881] io scheduler kyber registered
+[    3.816839] Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+[    3.869830] 10000000.uart: ttyS0 at MMIO 0x10000000 (irq = 10, base_baud = 230400) is a 16550A
+[    8.348990] printk: console [ttyS0] enabled
+[    8.431798] [drm] radeon kernel modesetting enabled.
+[    8.724696] loop: module loaded
+[    8.883840] virtio_blk virtio0: [vda] 204800 512-byte logical blocks (105 MB/100 MiB)
+[    9.001852] libphy: Fixed MDIO Bus: probed
+[    9.089842] e1000e: Intel(R) PRO/1000 Network Driver - 3.2.6-k
+[    9.149054] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    9.213276] ehci_hcd: USB 2.0 'Enhanced' Host Controller (EHCI) Driver
+[    9.272730] ehci-pci: EHCI PCI platform driver
+[    9.333478] ehci-platform: EHCI generic platform driver
+[    9.394449] ohci_hcd: USB 1.1 'Open' Host Controller (OHCI) Driver
+[    9.453573] ohci-pci: OHCI PCI platform driver
+[    9.514010] ohci-platform: OHCI generic platform driver
+[    9.581489] usbcore: registered new interface driver uas
+[    9.642718] usbcore: registered new interface driver usb-storage
+[    9.708040] mousedev: PS/2 mouse device common for all mice
+[    9.786904] usbcore: registered new interface driver usbhid
+[    9.846033] usbhid: USB HID core driver
+[    9.951406] NET: Registered protocol family 10
+[   10.039863] Segment Routing with IPv6
+[   10.102449] sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+[   10.189783] NET: Registered protocol family 17
+[   10.260784] 9pnet: Installing 9P2000 support
+[   10.322578] Key type dns_resolver registered
+[   10.423380] EXT4-fs (vda): mounting ext2 file system using the ext4 subsystem
+[   10.536168] EXT4-fs (vda): warning: mounting unchecked fs, running e2fsck is recommended
+[   10.613433] EXT4-fs (vda): mounted filesystem without journal. Opts: (null)
+[   10.673739] VFS: Mounted root (ext2 filesystem) on device 254:0.
+[   10.737193] devtmpfs: mounted
+[   10.802606] Freeing unused kernel memory: 212K
+[   10.861531] This architecture does not have kernel memory protection.
 ```

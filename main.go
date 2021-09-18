@@ -183,7 +183,7 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	addr := cpu.pc
 
 	if DEBUG {
-		if cpu.count > 120056000 && cpu.count < 120057000 {
+		if cpu.count > 125084750 && cpu.count < 126094750 {
 			// if cpu.count%100 == 0 {
 			var regs []string
 			for _, r := range cpu.x {
@@ -2204,8 +2204,9 @@ func NewVirtioBlock(byts []uint8, cpu *CPU) VirtioBlock {
 		data[i>>3] |= uint64(byts[i]) << ((i % 8) * 8)
 	}
 	return VirtioBlock{
-		cpu:  cpu,
-		data: data,
+		cpu:        cpu,
+		data:       data,
+		queueAlign: [1]uint32{0x1000},
 	}
 }
 
