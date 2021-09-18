@@ -158,13 +158,15 @@ func (cpu *CPU) step() {
 		cpu.exception(reason, trapaddr, addr)
 	}
 
-	cpu.clint.step(cpu.count, &cpu.csr[MIP])
-	cpu.uart.step(cpu.count)
 	cpu.disk.step(cpu.count)
-	cpu.plic.step(cpu.count, cpu.uart.interrupting, cpu.disk.interruptStatus&0b1 == 1, &cpu.csr[MIP])
 	cpu.count++
+	cpu.uart.step(cpu.count)
+	cpu.clint.step(cpu.count, &cpu.csr[MIP])
+	cpu.plic.step(cpu.count, cpu.uart.interrupting, cpu.disk.interruptStatus&0b1 == 1, &cpu.csr[MIP])
 
 	cpu.interrupt(cpu.pc)
+
+	cpu.csr[CYCLE] = cpu.count * 8
 }
 
 func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
@@ -181,7 +183,7 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 	addr := cpu.pc
 
 	if DEBUG {
-		if cpu.count > 16043500 {
+		if cpu.count > 120056000 && cpu.count < 120057000 {
 			// if cpu.count%100 == 0 {
 			var regs []string
 			for _, r := range cpu.x {
@@ -1408,7 +1410,7 @@ func (cpu *CPU) readraw(vaddr uint64) (uint8, bool) {
 	return cpu.readphysical(paddr), true
 }
 
-func (cpu *CPU) readphysical(addr uint64) uint8 {
+func (cpu *CPU) readphysical(addr uint64) (ret uint8) {
 	if addr >= MEMORYBASE {
 		return cpu.mem[addr-MEMORYBASE]
 	}
@@ -1417,7 +1419,7 @@ func (cpu *CPU) readphysical(addr uint64) uint8 {
 		if daddr >= uint64(len(dtb)) {
 			return 0
 		}
-		return dtb[addr-0x00001020]
+		return dtb[daddr]
 	}
 	if addr >= 0x02000000 && addr <= 0x0200ffff {
 		return cpu.clint.readuint8(addr)
@@ -1971,7 +1973,7 @@ func (plic *Plic) writeuint8(addr uint64, v uint8) {
 		}
 	} else if addr == 0x0c201004 {
 		index := v >> 3
-		plic.ips[index] &= ^(1 << v)
+		plic.ips[index] &= ^(1 << (v & 0b111))
 		plic.updateIRQ = true
 	} else {
 		// fmt.Printf("warning: ignored plic[%x] <= %x\n", addr, v)
