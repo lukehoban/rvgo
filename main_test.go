@@ -51,7 +51,7 @@ func TestLinux(t *testing.T) {
 	assert.NoError(t, err)
 	rootfs, err := ioutil.ReadFile(filepath.Join("linux", "rootfs.img"))
 	assert.NoError(t, err)
-	cpu := NewCPU(mem, entry, rootfs) // TODO: Mount a root filesystem
+	cpu := NewCPU(mem, entry, rootfs)
 	start := time.Now()
 
 	defer func() {

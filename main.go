@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"debug/elf"
 	_ "embed"
 	"fmt"
+	"io/ioutil"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"unsafe"
 )
@@ -118,7 +121,7 @@ type CPU struct {
 	reservation    uint64
 	reservationSet bool
 
-	uart  Uart
+	uart  *Uart
 	plic  Plic
 	clint Clint
 	disk  VirtioBlock
@@ -2046,18 +2049,43 @@ type Uart struct {
 	scr          uint8
 	threip       bool
 	interrupting bool
+
+	inputBuffer bytes.Buffer
 }
 
-func NewUart() Uart {
-	return Uart{
+func NewUart() *Uart {
+	uart := &Uart{
 		lsr: LSR_THR_EMPTY,
 	}
+	go func() {
+		for {
+			var b [256]byte
+			n, _ := os.Stdin.Read(b[:])
+			for i := 0; i < n; i++ {
+				err := uart.inputBuffer.WriteByte(b[i])
+				if err != nil {
+					panic(err)
+				}
+			}
+		}
+	}()
+	return uart
 }
 
 func (uart *Uart) step(clock uint64) {
 	rxip := false
 
-	// TODO: input
+	if clock%0x38400 == 0 && uart.rbr == 0 {
+		b, err := uart.inputBuffer.ReadByte()
+		if err == nil {
+			uart.rbr = b
+			uart.lsr |= LSR_DATA_AVAILABLE
+			uart.updateIIR()
+			if uart.ier&IER_RXINT_BIT != 0 {
+				rxip = true
+			}
+		}
+	}
 
 	if clock%0x10 == 0 && uart.thr != 0 {
 		_, err := os.Stdout.Write([]byte{uart.thr})
@@ -2440,13 +2468,16 @@ func (vb *VirtioBlock) writeuint8(addr uint64, v uint8) {
 }
 
 func do() error {
-	mem := make([]byte, 0x100000000)
-	entry, err := loadElf("rv64ui-p-add", mem)
+	mem := make([]byte, 0x10000000)
+	entry, err := loadElf(filepath.Join("linux", "fw_payload.elf"), mem)
 	if err != nil {
 		return err
 	}
-
-	cpu := NewCPU(mem, entry, nil)
+	rootfs, err := ioutil.ReadFile(filepath.Join("linux", "rootfs.img"))
+	if err != nil {
+		return err
+	}
+	cpu := NewCPU(mem, entry, rootfs)
 	cpu.run()
 	return nil
 }
