@@ -153,9 +153,9 @@ func (cpu *CPU) run() {
 
 func (cpu *CPU) step() {
 	addr := cpu.pc
-	ok, reason, trapaddr := cpu.stepInner()
+	ok, trap := cpu.stepInner()
 	if !ok {
-		cpu.exception(reason, trapaddr, addr)
+		cpu.exception(trap, addr)
 	}
 
 	cpu.disk.step(cpu.count)
@@ -169,26 +169,32 @@ func (cpu *CPU) step() {
 	cpu.csr[CYCLE] = cpu.count * 8
 }
 
-func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
+func (cpu *CPU) stepInner() (bool, Trap) {
 	if cpu.wfi {
 		fmt.Printf("warning - waiting for interrupt pc=%08x mip=%08x mie=%08x\n", cpu.pc, cpu.readcsr(MIP), cpu.readcsr(MIE))
 		// TODO: Support interrupts
-		return true, 0, 0
+		return true, Trap{}
 	}
-	instr, ok, reason := cpu.fetch()
+	instr, ok, trap := cpu.fetch()
 	if !ok {
-		return false, reason, cpu.pc
+		cpu.pc += 4 // TODO: okay?
+		return false, trap
 	}
 
 	addr := cpu.pc
 
 	if DEBUG {
-		if cpu.count > 125084750 && cpu.count < 126094750 {
-			// if cpu.count%100 == 0 {
+		// if cpu.count > 10084750 {
+		if cpu.count%100000 == 0 {
 			var regs []string
 			for _, r := range cpu.x {
 				regs = append(regs, fmt.Sprintf("%x", uint64(r)))
 			}
+			// memHash := sha1.Sum(cpu.mem)
+			// csrSlice := cpu.csr[:]
+			// csrBytes := *((*[]uint8)(unsafe.Pointer(&csrSlice)))
+			// csrHash := sha1.Sum(csrBytes)
+			// fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s] mem=%0x csrs=%0x\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "), memHash, csrHash)
 			fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
 		}
 	}
@@ -199,20 +205,20 @@ func (cpu *CPU) stepInner() (bool, TrapReason, uint64) {
 		cpu.pc += 2
 		instr = cpu.decompress(instr & 0xFFFF)
 	}
-	ok, reason, trapaddr := cpu.exec(instr, addr)
+	ok, trap = cpu.exec(instr, addr)
 	cpu.x[0] = 0
 	if !ok {
-		return false, reason, trapaddr
+		return false, trap
 	}
-	return true, 0, 0
+	return true, Trap{}
 }
 
-func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
+func (cpu *CPU) fetch() (uint32, bool, Trap) {
 	v := uint32(0)
 	if cpu.pc&0xfff <= 0x1000-4 { // instruction is within a single page
 		paddr, ok := cpu.virtualToPhysical(cpu.pc, Execute)
 		if !ok {
-			return 0, false, InstructionPageFault
+			return 0, false, Trap{reason: InstructionPageFault, value: cpu.pc}
 		}
 		if paddr >= MEMORYBASE && paddr%4 == 0 {
 			memaddr := paddr - MEMORYBASE
@@ -227,13 +233,13 @@ func (cpu *CPU) fetch() (uint32, bool, TrapReason) {
 		for i := uint64(0); i < 4; i++ {
 			paddr, ok := cpu.virtualToPhysical(cpu.pc+i, Execute)
 			if !ok {
-				return 0, false, InstructionPageFault
+				return 0, false, Trap{reason: InstructionPageFault, value: cpu.pc + i}
 			}
 			x := cpu.readphysical(paddr)
 			v |= uint32(x) << (i * 8)
 		}
 	}
-	return v, true, 0
+	return v, true, Trap{}
 }
 
 type TrapReason uint64
@@ -269,8 +275,13 @@ const (
 	StorePageFault               TrapReason = 0x000000000000000F
 )
 
-func (cpu *CPU) exception(reason TrapReason, trapaddr uint64, instructionaddr uint64) {
-	cpu.trap(reason, trapaddr, instructionaddr, false)
+type Trap struct {
+	reason TrapReason
+	value  uint64
+}
+
+func (cpu *CPU) exception(trap Trap, instructionaddr uint64) {
+	cpu.trap(trap.reason, trap.value, instructionaddr, false)
 }
 
 func (cpu *CPU) interrupt(pc uint64) {
@@ -307,8 +318,11 @@ func (cpu *CPU) interrupt(pc uint64) {
 	}
 }
 
-func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool) bool {
-	// fmt.Fprintf(debugFile, "Handling trap: %v, %08x, %08x\n", reason, trapaddr, addr)
+func (cpu *CPU) trap(reason TrapReason, value, addr uint64, isInterrupt bool) bool {
+	// if reason != 0x8000000000000007 && reason != 0x8000000000000005 {
+	// if reason == 0x8000000000000009 {
+	// 	fmt.Fprintf(debugFile, "Handling trap: %d, %08x, %08x, %08x\n", cpu.count, reason, value, addr)
+	// }
 	var mdeleg, sdeleg uint64
 	if isInterrupt {
 		mdeleg, sdeleg = cpu.readcsr(MIDELEG), cpu.readcsr(SIDELEG)
@@ -402,7 +416,7 @@ func (cpu *CPU) trap(reason TrapReason, trapaddr, addr uint64, isInterrupt bool)
 	cpu.priv = handlePriv
 	cpu.writecsr(epcAddr, addr)
 	cpu.writecsr(causeAddr, uint64(reason))
-	cpu.writecsr(tvalAddr, trapaddr)
+	cpu.writecsr(tvalAddr, value)
 	cpu.pc = cpu.readcsr(tvecAddr)
 	if (cpu.pc & 0b11) != 0 {
 		panic("vector type address")
@@ -555,7 +569,7 @@ func parseR(instr uint32) R {
 	}
 }
 
-func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
+func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 	switch instr & 0x7f {
 	case 0b0110111: // LUI
 		op := parseU(instr)
@@ -611,45 +625,45 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		op := parseI(instr)
 		switch op.funct3 {
 		case 0b000: // LB
-			data, ok, reason := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(int8(data))
 		case 0b001: // LH
-			data, ok, reason := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(int16(data))
 		case 0b010: // LW
-			data, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(int32(data))
 		case 0b100: // LBU
-			data, ok, reason := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint8(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(data)
 		case 0b101: // LHU
-			data, ok, reason := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint16(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(data)
 		case 0b011: // LD
-			data, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(data)
 		case 0b110: // LWU
-			data, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
+			data, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
 			if !ok {
-				return false, reason, addr
+				return false, trap
 			}
 			cpu.x[op.rd] = int64(uint64(data))
 		default:
@@ -659,13 +673,25 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		op := parseS(instr)
 		switch op.funct3 {
 		case 0b000: // SB
-			cpu.writeuint8(uint64(cpu.x[op.rs1]+int64(op.imm)), uint8(cpu.x[op.rs2]))
+			ok, trap := cpu.writeuint8(uint64(cpu.x[op.rs1]+int64(op.imm)), uint8(cpu.x[op.rs2]))
+			if !ok {
+				return false, trap
+			}
 		case 0b001: // SH
-			cpu.writeuint16(uint64(cpu.x[op.rs1]+int64(op.imm)), uint16(cpu.x[op.rs2]))
+			ok, trap := cpu.writeuint16(uint64(cpu.x[op.rs1]+int64(op.imm)), uint16(cpu.x[op.rs2]))
+			if !ok {
+				return false, trap
+			}
 		case 0b010: // SW
-			cpu.writeuint32(uint64(cpu.x[op.rs1]+int64(op.imm)), uint32(cpu.x[op.rs2]))
+			ok, trap := cpu.writeuint32(uint64(cpu.x[op.rs1]+int64(op.imm)), uint32(cpu.x[op.rs2]))
+			if !ok {
+				return false, trap
+			}
 		case 0b011: // SD
-			cpu.writeuint64(uint64(cpu.x[op.rs1]+int64(op.imm)), uint64(cpu.x[op.rs2]))
+			ok, trap := cpu.writeuint64(uint64(cpu.x[op.rs1]+int64(op.imm)), uint64(cpu.x[op.rs2]))
+			if !ok {
+				return false, trap
+			}
 		default:
 			panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 		}
@@ -855,13 +881,13 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			case 0: // ECALL
 				switch cpu.priv {
 				case User:
-					return false, EnvironmentCallFromUMode, addr
+					return false, Trap{reason: EnvironmentCallFromUMode, value: addr}
 				case Supervisor:
-					return false, EnvironmentCallFromSMode, addr
+					return false, Trap{reason: EnvironmentCallFromSMode, value: addr}
 				case Hypervisor:
-					return false, EnvironmentCallFromHMode, addr
+					return false, Trap{reason: EnvironmentCallFromHMode, value: addr}
 				case Machine:
-					return false, EnvironmentCallFromMMode, addr
+					return false, Trap{reason: EnvironmentCallFromMMode, value: addr}
 				default:
 					panic("invalid CPU privilege")
 				}
@@ -1027,17 +1053,17 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b00010:
 			switch op.funct3 {
 			case 0b010: // LR.W
-				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.reservationSet = true
 				cpu.reservation = uint64(cpu.x[op.rs1])
 				cpu.x[op.rd] = int64(int32(v))
 			case 0b011: // LR.D
-				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.reservationSet = true
 				cpu.reservation = uint64(cpu.x[op.rs1])
@@ -1049,9 +1075,9 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 			switch op.funct3 {
 			case 0b010: // SC.W
 				if cpu.reservationSet && cpu.reservation == uint64(cpu.x[op.rs1]) {
-					ok, reason := cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
+					ok, trap := cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
 					if !ok {
-						return false, reason, addr
+						return false, trap
 					}
 					cpu.reservationSet = false
 					cpu.x[op.rd] = 0
@@ -1060,9 +1086,9 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 				}
 			case 0b011: // SC.D
 				if cpu.reservationSet && cpu.reservation == uint64(cpu.x[op.rs1]) {
-					ok, reason := cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]))
+					ok, trap := cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]))
 					if !ok {
-						return false, reason, addr
+						return false, trap
 					}
 					cpu.reservationSet = false
 					cpu.x[op.rd] = 0
@@ -1075,23 +1101,23 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b00001:
 			switch op.funct3 {
 			case 0b010: // AMOSWAP.W
-				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(int32(v))
 			case 0b011: // AMOSWAP.D
-				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]))
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(v)
 			default:
@@ -1100,23 +1126,23 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b00000:
 			switch op.funct3 {
 			case 0b010: // AMOADD.W
-				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]+int64(int32(v))))
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]+int64(int32(v))))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(int32(v))
 			case 0b011: // AMOADD.D
-				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]+int64(v)))
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]+int64(v)))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(v)
 			default:
@@ -1127,23 +1153,23 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b01100:
 			switch op.funct3 {
 			case 0b010: // AMOAND.W
-				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]&int64(int32(v))))
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]&int64(int32(v))))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(int32(v))
 			case 0b011: // AMOAND.D
-				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]&int64(v)))
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]&int64(v)))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(v)
 			default:
@@ -1152,23 +1178,23 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		case 0b01000:
 			switch op.funct3 {
 			case 0b010: // AMOOR.W
-				v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]|int64(int32(v))))
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), uint32(cpu.x[op.rs2]|int64(int32(v))))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(int32(v))
 			case 0b011: // AMOOR.D
-				v, ok, reason := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
-				ok, reason = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]|int64(v)))
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), uint64(cpu.x[op.rs2]|int64(v)))
 				if !ok {
-					return false, reason, addr
+					return false, trap
 				}
 				cpu.x[op.rd] = int64(v)
 			default:
@@ -1187,9 +1213,9 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 		}
 	case 0b0000111: // FLW
 		op := parseI(instr)
-		v, ok, reason := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
+		v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1] + int64(op.imm)))
 		if !ok {
-			return false, reason, addr
+			return false, trap
 		}
 		cpu.f[op.rd] = math.Float64frombits(uint64(int64(int32(v))))
 	case 0b0100111:
@@ -1258,7 +1284,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, TrapReason, uint64) {
 	default:
 		panic(fmt.Sprintf("nyi - opcode %x", instr&0x7f))
 	}
-	return true, 0, 0
+	return true, Trap{}
 }
 
 func (cpu *CPU) readcsr(csr uint16) uint64 {
@@ -1485,12 +1511,12 @@ func (cpu *CPU) writephysical(addr uint64, v byte) {
 	panic(fmt.Sprintf("nyi - unsupported address %x: %x", addr, v))
 }
 
-func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
+func (cpu *CPU) readuint64(addr uint64) (uint64, bool, Trap) {
 	val := uint64(0)
 	if addr&0xfff <= 0x1000-4 { // instruction is within a single page
 		paddr, ok := cpu.virtualToPhysical(addr, Read)
 		if !ok {
-			return 0, false, 0
+			return 0, false, Trap{reason: LoadPageFault, value: addr}
 		}
 		for i := uint64(0); i < 8; i++ {
 			x := cpu.readphysical(paddr + i)
@@ -1500,52 +1526,52 @@ func (cpu *CPU) readuint64(addr uint64) (uint64, bool, TrapReason) {
 		for i := uint64(0); i < 8; i++ {
 			paddr, ok := cpu.virtualToPhysical(addr+i, Execute)
 			if !ok {
-				return 0, false, 0
+				return 0, false, Trap{reason: LoadPageFault, value: addr + i}
 			}
 			x := cpu.readphysical(paddr)
 			val |= uint64(x) << (i * 8)
 		}
 	}
-	return val, true, 0
+	return val, true, Trap{}
 }
 
-func (cpu *CPU) readuint32(addr uint64) (uint32, bool, TrapReason) {
+func (cpu *CPU) readuint32(addr uint64) (uint32, bool, Trap) {
 	val := uint32(0)
 	for i := uint64(0); i < 4; i++ {
 		x, ok := cpu.readraw(addr + i)
 		if !ok {
-			return 0, false, 0
+			return 0, false, Trap{reason: LoadPageFault, value: addr + i}
 		}
 		val |= uint32(x) << (i * 8)
 	}
-	return val, true, 0
+	return val, true, Trap{}
 }
 
-func (cpu *CPU) readuint16(addr uint64) (uint16, bool, TrapReason) {
+func (cpu *CPU) readuint16(addr uint64) (uint16, bool, Trap) {
 	val := uint16(0)
 	for i := uint64(0); i < 2; i++ {
 		x, ok := cpu.readraw(addr + i)
 		if !ok {
-			return 0, false, 0
+			return 0, false, Trap{reason: LoadPageFault, value: addr + i}
 		}
 		val |= uint16(x) << (i * 8)
 	}
-	return val, true, 0
+	return val, true, Trap{}
 }
 
-func (cpu *CPU) readuint8(addr uint64) (uint8, bool, TrapReason) {
+func (cpu *CPU) readuint8(addr uint64) (uint8, bool, Trap) {
 	x, ok := cpu.readraw(addr)
 	if !ok {
-		return 0, false, 0
+		return 0, false, Trap{reason: LoadPageFault, value: addr}
 	}
-	return x, true, 0
+	return x, true, Trap{}
 }
 
-func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, TrapReason) {
+func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, Trap) {
 	if addr&0xfff <= 0x1000-8 { // uint64 is within a single page
 		paddr, ok := cpu.virtualToPhysical(addr, Write)
 		if !ok {
-			return false, 0
+			return false, Trap{reason: StorePageFault, value: addr}
 		}
 		if paddr >= MEMORYBASE {
 			memaddr := paddr - MEMORYBASE
@@ -1555,45 +1581,45 @@ func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, TrapReason) {
 				cpu.writephysical(paddr+i, byte(val>>(i*8)))
 			}
 		}
-		return true, 0
+		return true, Trap{}
 	} else { // uint64 is across two pages
 		for i := uint64(0); i < 8; i++ {
 			paddr, ok := cpu.virtualToPhysical(addr+i, Write)
 			if !ok {
-				return false, 0
+				return false, Trap{reason: StorePageFault, value: addr + i}
 			}
 			cpu.writephysical(paddr, byte(val>>(i*8)))
 		}
-		return true, 0
+		return true, Trap{}
 	}
 }
 
-func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, TrapReason) {
+func (cpu *CPU) writeuint32(addr uint64, val uint32) (bool, Trap) {
 	for i := uint64(0); i < 4; i++ {
 		ok := cpu.writeraw(addr+i, byte(val>>(i*8)))
 		if !ok {
-			return false, 0
+			return false, Trap{reason: StorePageFault, value: addr + i}
 		}
 	}
-	return true, 0
+	return true, Trap{}
 }
 
-func (cpu *CPU) writeuint16(addr uint64, val uint16) (bool, TrapReason) {
+func (cpu *CPU) writeuint16(addr uint64, val uint16) (bool, Trap) {
 	for i := uint64(0); i < 2; i++ {
 		ok := cpu.writeraw(addr+i, byte(val>>(i*8)))
 		if !ok {
-			return false, 0
+			return false, Trap{reason: StorePageFault, value: addr + i}
 		}
 	}
-	return true, 0
+	return true, Trap{}
 }
 
-func (cpu *CPU) writeuint8(addr uint64, val uint8) (bool, TrapReason) {
+func (cpu *CPU) writeuint8(addr uint64, val uint8) (bool, Trap) {
 	ok := cpu.writeraw(addr, byte(val))
 	if !ok {
-		return false, 0
+		return false, Trap{reason: StorePageFault, value: addr}
 	}
-	return true, 0
+	return true, Trap{}
 }
 
 func (cpu *CPU) decompress(instr uint32) uint32 {
