@@ -1403,7 +1403,18 @@ func (cpu *CPU) walkPageTables(vaddr uint64, level uint8, parentppn uint64, vpns
 	}
 
 	if a == 0 || (access == Write && d == 0) {
-		panic("nyi - a and d")
+		newpte := pte | 1<<6
+		if access == Write {
+			newpte |= 1 << 7
+		}
+		cpu.writephysical(pteaddr, uint8(newpte))
+		cpu.writephysical(pteaddr+1, uint8(newpte>>8))
+		cpu.writephysical(pteaddr+2, uint8(newpte>>16))
+		cpu.writephysical(pteaddr+3, uint8(newpte>>24))
+		cpu.writephysical(pteaddr+4, uint8(newpte>>32))
+		cpu.writephysical(pteaddr+5, uint8(newpte>>40))
+		cpu.writephysical(pteaddr+6, uint8(newpte>>48))
+		cpu.writephysical(pteaddr+7, uint8(newpte>>56))
 	}
 
 	if (access == Execute && x == 0) || (access == Read && r == 0) || (access == Write && w == 0) {
@@ -1653,8 +1664,13 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			return offset<<20 | (rs1+8)<<15 | 3<<12 | (rd+8)<<7 | 0x3
 		case 0b100:
 			panic("nyi - reserved")
-		case 0b101:
-			panic("nyi - C.FSD/C.SQ")
+		case 0b101: // C.FSD = fsd rs2+8, offset(rs1+8)
+			rs1 := (instr >> 7) & 0x7
+			rs2 := (instr >> 2) & 0x7
+			offset := (instr>>7)&0x38 | (instr<<1)&0xc0
+			imm115 := (offset >> 5) & 0x7f
+			imm40 := offset & 0x1f
+			return imm115<<25 | (rs2+8)<<20 | (rs1+8)<<15 | 3<<12 | imm40<<7 | 0x27
 		case 0b110: // C.SW = sw rs2+8, offset(rs1+8)
 			rs1 := (instr >> 7) & 0x7
 			rs2 := (instr >> 2) & 0x7
