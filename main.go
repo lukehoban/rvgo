@@ -171,8 +171,6 @@ func (cpu *CPU) step() {
 
 func (cpu *CPU) stepInner() (bool, Trap) {
 	if cpu.wfi {
-		fmt.Printf("warning - waiting for interrupt pc=%08x mip=%08x mie=%08x\n", cpu.pc, cpu.readcsr(MIP), cpu.readcsr(MIE))
-		// TODO: Support interrupts
 		return true, Trap{}
 	}
 	instr, ok, trap := cpu.fetch()
@@ -1218,8 +1216,13 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 			return false, trap
 		}
 		cpu.f[op.rd] = math.Float64frombits(uint64(int64(int32(v))))
-	case 0b0100111:
-		panic("nyi - fsw")
+	case 0b0100111: // FSW
+		op := parseS(instr)
+		v := uint32(math.Float64bits(cpu.f[op.rs2]))
+		ok, trap := cpu.writeuint32(uint64(cpu.x[op.rs1]+int64(op.imm)), v)
+		if !ok {
+			return false, trap
+		}
 	case 0b1000011:
 		panic("nyi - FMADD.S")
 	case 0b1000111:
@@ -1845,8 +1848,14 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			}
 		case 0b001:
 			panic("nyi - C.FLDSP/C.LQSP")
-		case 0b010:
-			panic("nyi - C.LWSP")
+		case 0b010: // C.LWSP = lw r, offset(x2)
+			r := (instr >> 7) & 0x1f
+			offset := (instr>>7)&0x20 | (instr>>2)&0x1c | (instr<<4)&0xc0
+			if r != 0 {
+				return offset<<20 | 2<<15 | 2<<12 | r<<7 | 0x3
+			} else {
+				panic("reserved")
+			}
 		case 0b011: // C.LDSP = ld rd, offset(x2)
 			rd := (instr >> 7) & 0x1f
 			offset := (instr>>7)&0x20 | (instr>>2)&0x18 | (instr<<4)&0x1c0
@@ -1885,8 +1894,12 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 			}
 		case 0b101:
 			panic("nyi - C.FSDSP/C.SQSP")
-		case 0b110:
-			panic("nyi - C.SWSP")
+		case 0b110: // C.SWSP = sw rs2, offset(x2)
+			rs2 := (instr >> 2) & 0x1f
+			offset := (instr>>7)&0x3c | (instr>>1)&0xc0
+			imm115 := (offset >> 5) & 0x3f
+			imm40 := offset & 0x1f
+			return imm115<<25 | rs2<<20 | 2<<15 | 2<<12 | imm40<<7 | 0x23
 		case 0b111: // C.SDSP = sd rs, offset(x2)
 			rs2 := (instr >> 2) & 0x1f
 			offset := (instr>>7)&0x38 | (instr>>1)&0x1c0
