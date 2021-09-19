@@ -134,4 +134,5 @@ PMP1    : 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
 [   10.737193] devtmpfs: mounted
 [   10.802606] Freeing unused kernel memory: 212K
 [   10.861531] This architecture does not have kernel memory protection.
+[   10.920852] Run /sbin/init as init process
 ```

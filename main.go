@@ -158,8 +158,8 @@ func (cpu *CPU) step() {
 		cpu.exception(trap, addr)
 	}
 
-	cpu.disk.step(cpu.count)
 	cpu.count++
+	cpu.disk.step()
 	cpu.uart.step(cpu.count)
 	cpu.clint.step(cpu.count, &cpu.csr[MIP])
 	cpu.plic.step(cpu.count, cpu.uart.interrupting, cpu.disk.interruptStatus&0b1 == 1, &cpu.csr[MIP])
@@ -2226,7 +2226,7 @@ type VirtioBlock struct {
 
 func NewVirtioBlock(byts []uint8, cpu *CPU) VirtioBlock {
 	data := make([]uint64, (len(byts)+7)/8)
-	for i := range data {
+	for i := range byts {
 		data[i>>3] |= uint64(byts[i]) << ((i % 8) * 8)
 	}
 	return VirtioBlock{
@@ -2236,13 +2236,13 @@ func NewVirtioBlock(byts []uint8, cpu *CPU) VirtioBlock {
 	}
 }
 
-func (vb *VirtioBlock) step(clock uint64) {
-	vb.clock = clock
+func (vb *VirtioBlock) step() {
 	if len(vb.notifications) != 0 && vb.clock == vb.notifications[0]+500 {
 		vb.interruptStatus |= 0b1
 		vb.handleNotification()
 		vb.notifications = vb.notifications[1:]
 	}
+	vb.clock++
 }
 
 func (vb *VirtioBlock) handleNotification() {
