@@ -902,8 +902,8 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 				default:
 					panic("invalid CPU privilege")
 				}
-			case 1:
-				panic("nyi - EBREAK")
+			case 1: // EBREAK
+				return false, Trap{reason: Breakpoint, value: addr}
 			case 0b000000000010: // URET
 				panic("nyi - URET")
 			case 0b000100000010: // SRET
