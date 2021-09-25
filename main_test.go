@@ -26,7 +26,7 @@ func TestRiscvTests(t *testing.T) {
 			mem := make([]byte, 0x10000)
 			entry, err := loadElf(filepath.Join("testdata", file.Name()), mem)
 			assert.NoError(t, err)
-			cpu := NewCPU(mem, entry, nil)
+			cpu := NewCPU(mem, entry, nil, nil)
 			for {
 				cpu.step()
 				exitcode := mem[0x1000]
@@ -51,7 +51,7 @@ func TestLinux(t *testing.T) {
 	assert.NoError(t, err)
 	rootfs, err := ioutil.ReadFile(filepath.Join("linux", "rootfs.img"))
 	assert.NoError(t, err)
-	cpu := NewCPU(mem, entry, rootfs)
+	cpu := NewCPU(mem, entry, rootfs, nil)
 	start := time.Now()
 
 	defer func() {

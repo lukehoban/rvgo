@@ -2063,29 +2063,31 @@ func NewUart(screen tcell.Screen) *Uart {
 	uart := &Uart{
 		lsr: LSR_THR_EMPTY,
 	}
-	go func() {
-		for {
-			ev := screen.PollEvent()
-			switch ev := ev.(type) {
-			case *tcell.EventKey:
-				switch ev.Key() {
-				case tcell.KeyRune:
-					var b [4]byte
-					n := utf8.EncodeRune(b[:], ev.Rune())
-					if n == 1 {
-						uart.inputBuffer.WriteByte(b[0])
-					} else {
-						panic(b)
+	if screen != nil {
+		go func() {
+			for {
+				ev := screen.PollEvent()
+				switch ev := ev.(type) {
+				case *tcell.EventKey:
+					switch ev.Key() {
+					case tcell.KeyRune:
+						var b [4]byte
+						n := utf8.EncodeRune(b[:], ev.Rune())
+						if n == 1 {
+							uart.inputBuffer.WriteByte(b[0])
+						} else {
+							panic(b)
+						}
+					case tcell.KeyEnter:
+						uart.inputBuffer.WriteByte('\n')
+					case tcell.KeyCtrlC:
+						screen.Fini()
+						panic("ctrl-c: exiting")
 					}
-				case tcell.KeyEnter:
-					uart.inputBuffer.WriteByte('\n')
-				case tcell.KeyCtrlC:
-					screen.Fini()
-					panic("ctrl-c: exiting")
 				}
 			}
-		}
-	}()
+		}()
+	}
 	return uart
 }
 
