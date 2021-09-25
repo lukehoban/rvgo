@@ -177,6 +177,9 @@ func (cpu *CPU) step() {
 
 func (cpu *CPU) stepInner() (bool, Trap) {
 	if cpu.wfi {
+		if cpu.readcsr(MIE)&cpu.readcsr(MIP) != 0 {
+			cpu.wfi = false
+		}
 		return true, Trap{}
 	}
 	instr, ok, trap := cpu.fetch()
@@ -1303,13 +1306,16 @@ func (cpu *CPU) readcsr(csr uint16) uint64 {
 	case FRM:
 		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] ", csr))
 	case SSTATUS:
-		return cpu.csr[MSTATUS] & 0x80000003000de162
+		return cpu.readcsr(MSTATUS) & 0x80000003000de162
 	case SIE:
 		return cpu.csr[MIE] & 0x222
 	case SIP:
 		return cpu.csr[MIP] & 0x222
 	case TIME:
 		return cpu.clint.mtime
+	case MSTATUS:
+		// Force UXL and SXL to RV64
+		return cpu.csr[MSTATUS]&^0xF00000000 | 0xA00000000
 	}
 	return cpu.csr[csr]
 }
