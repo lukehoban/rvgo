@@ -10,7 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 	"unsafe"
+
+	"github.com/gdamore/tcell/v2"
 )
 
 var MEMORYBASE uint64 = 0x80000000
@@ -129,14 +132,14 @@ type CPU struct {
 	count uint64
 }
 
-func NewCPU(mem []byte, pc uint64, disk []byte) CPU {
+func NewCPU(mem []byte, pc uint64, disk []byte, screen tcell.Screen) CPU {
 	cpu := CPU{
 		pc:    pc,
 		mem:   mem,
 		mem32: *((*[]uint32)(unsafe.Pointer(&mem))),
 		mem64: *((*[]uint64)(unsafe.Pointer(&mem))),
 		priv:  Machine,
-		uart:  NewUart(),
+		uart:  NewUart(screen),
 		plic:  NewPlic(),
 		clint: NewClint(),
 	}
@@ -917,7 +920,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 					mpriv = (status >> 17) & 0b1
 				}
 				status = status&^0x21888 | mpriv<<17 | mpie<<3 | 1<<7
-				cpu.writecsr(SSTATUS, status)
+				cpu.writecsr(MSTATUS, status)
 			case 0b000100000101: // WFI
 				cpu.wfi = true
 			default:
@@ -1318,6 +1321,9 @@ func (cpu *CPU) writecsr(csr uint16, v uint64) {
 	case FRM:
 		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] = %x", csr, v))
 	case SSTATUS:
+		// if (cpu.csr[MSTATUS]>>1)&1 != (v>>1)&1 {
+		// 	fmt.Fprintf(os.Stderr, "sie = %d\n", (v>>1)&1)
+		// }
 		cpu.csr[MSTATUS] = cpu.csr[MSTATUS]&^0x80000003000de162 | v&0x80000003000de162
 	case SIE:
 		cpu.csr[MIE] = cpu.csr[MIE]&^0x222 | v&0x222
@@ -2053,18 +2059,29 @@ type Uart struct {
 	inputBuffer bytes.Buffer
 }
 
-func NewUart() *Uart {
+func NewUart(screen tcell.Screen) *Uart {
 	uart := &Uart{
 		lsr: LSR_THR_EMPTY,
 	}
 	go func() {
 		for {
-			var b [256]byte
-			n, _ := os.Stdin.Read(b[:])
-			for i := 0; i < n; i++ {
-				err := uart.inputBuffer.WriteByte(b[i])
-				if err != nil {
-					panic(err)
+			ev := screen.PollEvent()
+			switch ev := ev.(type) {
+			case *tcell.EventKey:
+				switch ev.Key() {
+				case tcell.KeyRune:
+					var b [4]byte
+					n := utf8.EncodeRune(b[:], ev.Rune())
+					if n == 1 {
+						uart.inputBuffer.WriteByte(b[0])
+					} else {
+						panic(b)
+					}
+				case tcell.KeyEnter:
+					uart.inputBuffer.WriteByte('\n')
+				case tcell.KeyCtrlC:
+					screen.Fini()
+					panic("ctrl-c: exiting")
 				}
 			}
 		}
@@ -2477,7 +2494,19 @@ func do() error {
 	if err != nil {
 		return err
 	}
-	cpu := NewCPU(mem, entry, rootfs)
+
+	screen, err := tcell.NewScreen()
+	if err != nil {
+		return err
+	}
+	err = screen.Init()
+	if err != nil {
+		return err
+	}
+	screen.Clear()
+	screen.Show()
+	defer screen.Fini()
+	cpu := NewCPU(mem, entry, rootfs, screen)
 	cpu.run()
 	return nil
 }
