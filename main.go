@@ -314,7 +314,11 @@ func (cpu *CPU) interrupt(pc uint64) {
 		}
 	}
 	if minterrupt&MIP_SSIP != 0 {
-		panic("nyi - handle SupervisorSoftwareInterrupt")
+		traptaken := cpu.trap(SupervisorSoftwareInterrupt, cpu.pc, pc, true)
+		if traptaken {
+			cpu.writecsr(MIP, cpu.readcsr(MIP)&^MIP_SSIP)
+			cpu.wfi = false
+		}
 	}
 	if minterrupt&MIP_STIP != 0 {
 		traptaken := cpu.trap(SupervisorTimerInterrupt, cpu.pc, pc, true)
