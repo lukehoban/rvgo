@@ -1343,7 +1343,7 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 		if !ok {
 			return false, trap
 		}
-		cpu.f[op.rd] = math.Float64frombits(uint64(int64(int32(v))))
+		cpu.f[op.rd] = float64(math.Float32frombits(v))
 	case 0b0100111: // FSW
 		op := parseS(instr)
 		v := uint32(math.Float64bits(cpu.f[op.rs2]))
@@ -1380,12 +1380,47 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 			op := parseR(instr)
 			switch op.rs2 {
 			case 0b00000: // FCVT.W.S
-				f64 := cpu.f[op.rs1]
-				f32 := float32(f64)
-				i32 := int32(f32)
-				cpu.x[op.rd] = int64(i32)
+				switch op.funct3 {
+				case 0b001:
+					v := cpu.f[op.rs1]
+					rounded := math.Trunc(v)
+					if rounded != v {
+						cpu.writecsr(FFLAGS, cpu.readcsr(FFLAGS)|0b00001) // NX
+					}
+					if rounded < -(1 << 31) {
+						cpu.writecsr(FFLAGS, cpu.readcsr(FFLAGS)|0b10000) // NV
+						cpu.x[op.rd] = -(1 << 31)
+					} else if rounded > ((1 << 31) - 1) {
+						cpu.writecsr(FFLAGS, cpu.readcsr(FFLAGS)|0b10000) // NV
+						cpu.x[op.rd] = (1 << 31) - 1
+					} else {
+						cpu.x[op.rd] = int64(int32(rounded))
+					}
+				default:
+					panic("nyi - rounding mode")
+				}
 			case 0b00001: // FCVT.WU.S
-				cpu.x[op.rd] = int64(uint64(uint32(float32(cpu.f[op.rs1]))))
+				switch op.funct3 {
+				case 0b001:
+
+					v := cpu.f[op.rs1]
+					rounded := math.Trunc(v)
+					if rounded != v {
+						cpu.writecsr(FFLAGS, cpu.readcsr(FFLAGS)|0b00001) // NX
+					}
+					if rounded < 0 {
+						cpu.writecsr(FFLAGS, cpu.readcsr(FFLAGS)|0b10000) // NV
+						cpu.x[op.rd] = 0
+					} else if rounded > ((1 << 32) - 1) {
+						cpu.writecsr(FFLAGS, cpu.readcsr(FFLAGS)|0b10000) // NV
+						cpu.x[op.rd] = (1 << 32) - 1
+					} else {
+						cpu.x[op.rd] = int64(uint32(rounded))
+					}
+
+				default:
+					panic("nyi - rounding mode")
+				}
 			default:
 				panic(fmt.Sprintf("invalid - %x", instr))
 			}

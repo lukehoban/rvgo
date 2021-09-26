@@ -19,14 +19,14 @@ func TestRiscvTests(t *testing.T) {
 		if strings.HasSuffix(file.Name(), ".dump") {
 			continue
 		}
-		// if file.Name() != "rv64uf-p-fcvt_w" {
-		// 	continue
-		// }
-		// var err error
-		// debugFile, err = os.Create("trace.txt")
-		// assert.NoError(t, err)
-		// defer debugFile.Close()
-		// DEBUG = true
+		if file.Name() != "rv64uf-p-fcvt_w" {
+			continue
+		}
+		var err error
+		debugFile, err = os.Create("trace.txt")
+		assert.NoError(t, err)
+		defer debugFile.Close()
+		DEBUG = true
 		t.Run(file.Name(), func(t *testing.T) {
 			mem := make([]byte, 0x10000)
 			entry, err := loadElf(filepath.Join("testdata", file.Name()), mem)
