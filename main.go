@@ -1211,13 +1211,129 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 				panic(fmt.Sprintf("nyi - invalid instruction %x", instr))
 			}
 		case 0b10000:
-			panic("nyi - AMOMIN.W")
+			switch op.funct3 {
+			case 0b010: // AMOMIN.W
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				min := v
+				if int32(cpu.x[op.rs2]) < int32(min) {
+					min = uint32(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), min)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOMIN.D
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				min := v
+				if cpu.x[op.rs2] < int64(min) {
+					min = uint64(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), min)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(v)
+			}
 		case 0b10100:
-			panic("nyi - AMOMAX.W")
+			switch op.funct3 {
+			case 0b010: // AMOMAX.W
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				max := v
+				if int32(cpu.x[op.rs2]) > int32(max) {
+					max = uint32(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), max)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOMAX.D
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				max := v
+				if cpu.x[op.rs2] > int64(max) {
+					max = uint64(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), max)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(v)
+			}
 		case 0b11000:
-			panic("nyi - AMOMINU.W")
+			switch op.funct3 {
+			case 0b010: // AMOMINU.W
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				min := v
+				if uint32(cpu.x[op.rs2]) < min {
+					min = uint32(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), min)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOMINU.D
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				min := v
+				if uint64(cpu.x[op.rs2]) < min {
+					min = uint64(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), min)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(v)
+			}
 		case 0b11100:
-			panic("nyi - AMOMAXU.W")
+			switch op.funct3 {
+			case 0b010: // AMOMAXU.W
+				v, ok, trap := cpu.readuint32(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				max := v
+				if uint32(cpu.x[op.rs2]) > max {
+					max = uint32(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint32(uint64(cpu.x[op.rs1]), max)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(int32(v))
+			case 0b011: // AMOMAXU.D
+				v, ok, trap := cpu.readuint64(uint64(cpu.x[op.rs1]))
+				if !ok {
+					return false, trap
+				}
+				max := v
+				if uint64(cpu.x[op.rs2]) > max {
+					max = uint64(cpu.x[op.rs2])
+				}
+				ok, trap = cpu.writeuint64(uint64(cpu.x[op.rs1]), max)
+				if !ok {
+					return false, trap
+				}
+				cpu.x[op.rd] = int64(v)
+			}
 		default:
 			panic("nyi - atomic")
 		}
