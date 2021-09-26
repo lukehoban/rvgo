@@ -19,9 +19,14 @@ func TestRiscvTests(t *testing.T) {
 		if strings.HasSuffix(file.Name(), ".dump") {
 			continue
 		}
-		// if file.Name() != "rv64si-p-wfi" {
+		// if file.Name() != "rv64mi-p-ma_fetch" {
 		// 	continue
 		// }
+		// var err error
+		// debugFile, err = os.Create("trace.txt")
+		// assert.NoError(t, err)
+		// defer debugFile.Close()
+		// DEBUG = true
 		t.Run(file.Name(), func(t *testing.T) {
 			mem := make([]byte, 0x10000)
 			entry, err := loadElf(filepath.Join("testdata", file.Name()), mem)

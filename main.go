@@ -147,7 +147,6 @@ func NewCPU(mem []byte, pc uint64, disk []byte, screen tcell.Screen) CPU {
 
 	// TODO: Why?
 	cpu.x[0xb] = 0x1020
-	cpu.writecsr(MISA, 0x800000008014312f)
 	return cpu
 }
 
@@ -192,18 +191,18 @@ func (cpu *CPU) stepInner() (bool, Trap) {
 
 	if DEBUG {
 		// if cpu.count > 10084750 {
-		if cpu.count%100000 == 0 {
-			var regs []string
-			for _, r := range cpu.x {
-				regs = append(regs, fmt.Sprintf("%x", uint64(r)))
-			}
-			// memHash := sha1.Sum(cpu.mem)
-			// csrSlice := cpu.csr[:]
-			// csrBytes := *((*[]uint8)(unsafe.Pointer(&csrSlice)))
-			// csrHash := sha1.Sum(csrBytes)
-			// fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s] mem=%0x csrs=%0x\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "), memHash, csrHash)
-			fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
+		// if cpu.count%100000 == 0 {
+		var regs []string
+		for _, r := range cpu.x {
+			regs = append(regs, fmt.Sprintf("%x", uint64(r)))
 		}
+		// memHash := sha1.Sum(cpu.mem)
+		// csrSlice := cpu.csr[:]
+		// csrBytes := *((*[]uint8)(unsafe.Pointer(&csrSlice)))
+		// csrHash := sha1.Sum(csrBytes)
+		// fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s] mem=%0x csrs=%0x\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "), memHash, csrHash)
+		fmt.Fprintf(debugFile, "%08d -- [%08x]: %08x [%s]\n", cpu.count, cpu.pc, instr, strings.Join(regs, ", "))
+		// }
 	}
 
 	if instr&0b11 == 0b11 {
@@ -1320,6 +1319,9 @@ func (cpu *CPU) readcsr(csr uint16) uint64 {
 	case MSTATUS:
 		// Force UXL and SXL to RV64
 		return cpu.csr[MSTATUS]&^0xF00000000 | 0xA00000000
+	case MISA:
+		// A, B, C, D, F, I, M, N, S, U + RV64 +
+		return 0x800000008014312f
 	}
 	return cpu.csr[csr]
 }
@@ -1606,9 +1608,8 @@ func (cpu *CPU) writeuint64(addr uint64, val uint64) (bool, Trap) {
 		if !ok {
 			return false, Trap{reason: StorePageFault, value: addr}
 		}
-		if paddr >= MEMORYBASE {
-			memaddr := paddr - MEMORYBASE
-			cpu.mem64[memaddr/8] = val
+		if paddr >= MEMORYBASE && (paddr-MEMORYBASE)%8 == 0 {
+			cpu.mem64[(paddr-MEMORYBASE)/8] = val
 		} else {
 			for i := uint64(0); i < 8; i++ {
 				cpu.writephysical(paddr+i, byte(val>>(i*8)))
