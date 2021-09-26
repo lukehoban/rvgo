@@ -1377,18 +1377,82 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 		case 0b0010100:
 			panic("nyi - FM**.S")
 		case 0b1100000:
-			panic("nyi - FCVT.W*.S")
-		case 0b1110000:
-			panic("nyi - FMV.X.W")
+			op := parseR(instr)
+			switch op.rs2 {
+			case 0b00000: // FCVT.W.S
+				f64 := cpu.f[op.rs1]
+				f32 := float32(f64)
+				i32 := int32(f32)
+				cpu.x[op.rd] = int64(i32)
+			case 0b00001: // FCVT.WU.S
+				cpu.x[op.rd] = int64(uint64(uint32(float32(cpu.f[op.rs1]))))
+			default:
+				panic(fmt.Sprintf("invalid - %x", instr))
+			}
+		case 0b1110000: // FMV.X.W
+			op := parseR(instr)
+			bits := math.Float32bits(float32(cpu.f[op.rs1]))
+			ibits := int32(bits)
+			cpu.x[op.rd] = int64(ibits)
 		case 0b1010000:
 			panic("nyi - FEQ.S/*")
 		case 0b1101000:
-			panic("nyi - FCVT.S.W*")
+			op := parseR(instr)
+			switch op.rs2 {
+			case 0b00000: // FCVT.S.W
+				cpu.f[op.rd] = float64(float32(int32(cpu.x[op.rs1])))
+			case 0b00001: // FCVT.S.WU
+				cpu.f[op.rd] = float64(float32(uint32(cpu.x[op.rs1])))
+			case 0b00010: // FCVT.S.L
+				cpu.f[op.rd] = float64(cpu.x[op.rs1])
+			case 0b00011: // FCVT.S.LU
+				cpu.f[op.rd] = float64(uint64(cpu.x[op.rs1]))
+			default:
+				panic(fmt.Sprintf("invalid - %x", instr))
+			}
 		case 0b1111000: // FMV.W.X
 			op := parseR(instr)
 			cpu.f[op.rd] = math.Float64frombits(uint64(uint32(cpu.x[op.rs1])))
+		case 0b0000001:
+			panic("nyi - FADD.D")
+		case 0b0000101:
+			panic("nyi - FSUB.D")
+		case 0b0001001:
+			panic("nyi - FMUL.D")
+		case 0b0001101:
+			panic("nyi - FDIV.D")
+		case 0b0101101:
+			panic("nyi - FSQRT.D")
+		case 0b0010001:
+			panic("nyi - FSGN*.D")
+		case 0b0010101:
+			panic("nyi - FM**.D")
+		case 0b1100001:
+			op := parseR(instr)
+			switch op.rs2 {
+			case 0b00000: // FCVT.W.D
+				cpu.x[op.rd] = int64(int32(uint32(cpu.f[op.rs1])))
+			case 0b00001: // FCVT.WU.D
+				cpu.x[op.rd] = int64(uint64(uint32(cpu.f[op.rs1])))
+			default:
+				panic(fmt.Sprintf("invalid - %x", instr))
+			}
+		case 0b1110001:
+			panic("nyi - FMV.X.D")
+		case 0b1010001:
+			panic("nyi - FEQ.D/*")
+		case 0b1101001:
+			op := parseR(instr)
+			switch op.rs2 {
+			case 0b00000: // FCVT.D.W
+				cpu.f[op.rd] = float64(int32(cpu.x[op.rs1]))
+			case 0b00001: // FCVT.D.WU
+				cpu.f[op.rd] = float64(uint32(cpu.x[op.rs1]))
+			default:
+				panic(fmt.Sprintf("invalid - %x", instr))
+			}
 		default:
-			panic("invalid")
+			panic(fmt.Sprintf("invalid - %x", instr))
 		}
 	case 0b0011011:
 		op := parseI(instr)
@@ -1421,9 +1485,9 @@ func (cpu *CPU) exec(instr uint32, addr uint64) (bool, Trap) {
 func (cpu *CPU) readcsr(csr uint16) uint64 {
 	switch csr {
 	case FFLAGS:
-		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] ", csr))
+		return cpu.readcsr(FCSR) & 0x1f
 	case FRM:
-		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] ", csr))
+		return (cpu.readcsr(FCSR) >> 5) & 0x7
 	case SSTATUS:
 		return cpu.readcsr(MSTATUS) & 0x80000003000de162
 	case SIE:
@@ -1445,9 +1509,9 @@ func (cpu *CPU) readcsr(csr uint16) uint64 {
 func (cpu *CPU) writecsr(csr uint16, v uint64) {
 	switch csr {
 	case FFLAGS:
-		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] = %x", csr, v))
+		cpu.csr[FCSR] = cpu.csr[FCSR]&^0x1f | v&0x1f
 	case FRM:
-		panic(fmt.Sprintf("not yet implemented - masking of other CSR: csr[%x] = %x", csr, v))
+		cpu.csr[FCSR] = cpu.csr[FCSR]&^0xe0 | (v<<5)&0xe0
 	case SSTATUS:
 		// if (cpu.csr[MSTATUS]>>1)&1 != (v>>1)&1 {
 		// 	fmt.Fprintf(os.Stderr, "sie = %d\n", (v>>1)&1)
@@ -2028,8 +2092,12 @@ func (cpu *CPU) decompress(instr uint32) uint32 {
 					}
 				}
 			}
-		case 0b101:
-			panic("nyi - C.FSDSP/C.SQSP")
+		case 0b101: // C.FSDSP = fsd rs2, offset(x2)
+			rs2 := (instr >> 2) & 0x1f
+			offset := (instr>>7)&0x38 | (instr>>1)&0x1c0
+			imm115 := (offset >> 5) & 0x3f
+			imm40 := offset & 0x1f
+			return imm115<<25 | rs2<<20 | 2<<15 | 3<<12 | imm40<<7 | 0x27
 		case 0b110: // C.SWSP = sw rs2, offset(x2)
 			rs2 := (instr >> 2) & 0x1f
 			offset := (instr>>7)&0x3c | (instr>>1)&0xc0
