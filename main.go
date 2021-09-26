@@ -2089,11 +2089,22 @@ func NewUart(screen tcell.Screen) *Uart {
 						} else {
 							panic(b)
 						}
-					case tcell.KeyEnter:
-						uart.inputBuffer.WriteByte('\n')
-					case tcell.KeyCtrlC:
+					case tcell.KeyCtrlD:
 						screen.Fini()
 						panic("ctrl-c: exiting")
+					case tcell.KeyUp:
+						uart.inputBuffer.Write([]byte{27, 91, 65})
+					case tcell.KeyDown:
+						uart.inputBuffer.Write([]byte{27, 91, 66})
+					case tcell.KeyRight:
+						uart.inputBuffer.Write([]byte{27, 91, 67})
+					case tcell.KeyLeft:
+						uart.inputBuffer.Write([]byte{27, 91, 68})
+					default:
+						if ev.Key()>>8 != 0 {
+							panic(ev.Key())
+						}
+						uart.inputBuffer.WriteByte(uint8(ev.Key()))
 					}
 				}
 			}
